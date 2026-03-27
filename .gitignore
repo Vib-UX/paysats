@@ -40,3 +40,5 @@ next-env.d.ts
 # local browser profiles for automation
 /chrome-profiles/boltz
 /chrome-profiles/p2pm
+/backend/chrome-profiles
+/backend/boltz-debug-attempt.png
