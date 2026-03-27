@@ -1,0 +1,43 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum OrderState {
+  IDLE
+  NWC_CONNECTED
+  QR_SCANNED
+  ROUTE_SHOWN
+  LN_INVOICE_PAID
+  BOLTZ_SWAP_PENDING
+  USDT_RECEIVED
+  USDC_SWAPPED
+  P2PM_ORDER_PLACED
+  P2PM_ORDER_CONFIRMED
+  IDR_SETTLED
+  COMPLETED
+  FAILED
+}
+
+model Order {
+  id               String     @id @default(cuid())
+  state            OrderState @default(IDLE)
+  satAmount        Int        @default(0)
+  usdtAmount       Float?
+  usdcAmount       Float?
+  idrAmount        Float?
+  boltzSwapId      String?
+  boltzTxHash      String?
+  swapTxHash       String?
+  p2pmOrderId      String?
+  p2pmPayoutMethod String?
+  merchantName     String?
+  qrisPayload      String?
+  createdAt        DateTime   @default(now())
+  updatedAt        DateTime   @updatedAt
+  completedAt      DateTime?
+}

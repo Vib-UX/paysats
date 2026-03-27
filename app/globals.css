@@ -1,0 +1,48 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --bg: #0a0a0a;
+  --fg: #ffffff;
+  --gold: #ffd700;
+  --orange: #f7931a;
+  --card: #121212;
+  --border: #222222;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  overflow-x: hidden;
+  background: var(--bg);
+  color: var(--fg);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  min-height: 100vh;
+  font-family: "Segoe UI", "SF Pro Display", -apple-system, BlinkMacSystemFont, sans-serif;
+}
+
+@layer utilities {
+  .tap-target {
+    min-height: 48px;
+  }
+
+  .gold-gradient {
+    background: linear-gradient(120deg, var(--gold), var(--orange));
+  }
+
+  .app-shell {
+    width: 100%;
+    max-width: 375px;
+    margin: 0 auto;
+    padding: 16px;
+  }
+}
