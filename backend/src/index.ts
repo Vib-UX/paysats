@@ -1,6 +1,10 @@
 import "dotenv/config";
 import cors from "cors";
 import express from "express";
+import {
+  deriveArbitrumErc4337ReceiveAddress,
+  requireArbitrumReceiveAddress
+} from "./arbitrumErc4337Address.js";
 import { createBoltzSwap, getBoltzSwapStatus } from "./boltz.js";
 import { log } from "./logger.js";
 import { createInvoice, initNwc, payInvoice } from "./nwc.js";
@@ -97,6 +101,29 @@ app.post("/api/nwc/pay-invoice", async (req, res) => {
   }
 });
 
+app.get("/api/wallet/arbitrum-receive-address", async (_req, res) => {
+  try {
+    const seed = process.env.WDK_SEED?.trim();
+    if (!seed) {
+      return res.status(400).json({ error: "WDK_SEED is not configured on the server." });
+    }
+    const derived = deriveArbitrumErc4337ReceiveAddress(seed);
+    log.info("api", "GET /api/wallet/arbitrum-receive-address", {
+      chainId: derived.chainId,
+      safePrefix: derived.safeAddress.slice(0, 10)
+    });
+    return res.json({
+      chainId: derived.chainId,
+      ownerAddress: derived.ownerAddress,
+      safeAddress: derived.safeAddress,
+      note: "ERC-4337 Safe counterfactual address on Arbitrum One (WDK predictSafeAddress)."
+    });
+  } catch (error) {
+    log.error("api", "GET /api/wallet/arbitrum-receive-address failed", error);
+    return res.status(500).json({ error: error instanceof Error ? error.message : "Failed to derive address" });
+  }
+});
+
 app.post("/api/boltz/create-swap", async (req, res) => {
   try {
     log.info("api", "POST /api/boltz/create-swap", {
@@ -104,7 +131,11 @@ app.post("/api/boltz/create-swap", async (req, res) => {
       merchant: req.body.merchant
     });
     const satAmount = Number(req.body.satAmount || 0);
-    const receiveAddress = String(req.body.receiveAddress || "");
+    let receiveAddress = String(req.body.receiveAddress || "").trim();
+    if (!receiveAddress) {
+      receiveAddress = requireArbitrumReceiveAddress();
+      log.info("api", "using WDK-derived Arbitrum ERC-4337 receive address");
+    }
     if (satAmount <= 0) return res.status(400).json({ error: "Invalid satAmount" });
 
     const swap = await createBoltzSwap({

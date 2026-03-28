@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { RoutePreview } from "@/components/swap/route-preview";
 import { InvoiceQrDisplay } from "@/components/wallet/invoice-qr-display";
@@ -23,11 +23,21 @@ export default function RoutePage() {
   const [balanceSats, setBalanceSats] = useState<number | null>(null);
   const [balanceMsat, setBalanceMsat] = useState<number | null>(null);
   const [walletAlias, setWalletAlias] = useState<string | null>(null);
+  const [arbitrumSafe, setArbitrumSafe] = useState<string | null>(null);
 
   const merchant = searchParams.get("merchant") || "Unknown Merchant";
   const idrAmount = Number(searchParams.get("amount") || 0);
 
   const satsAmount = useMemo(() => Math.max(1, Math.ceil(idrAmount / 2)), [idrAmount]);
+
+  useEffect(() => {
+    fetch(`${API_BASE}/api/wallet/arbitrum-receive-address`)
+      .then((r) => r.json())
+      .then((data) => {
+        if (typeof data.safeAddress === "string") setArbitrumSafe(data.safeAddress);
+      })
+      .catch(() => {});
+  }, []);
 
   async function fundViaWebln(invoice: string): Promise<void> {
     const provider = (window as unknown as { webln?: WebLnProvider }).webln;
@@ -80,7 +90,6 @@ export default function RoutePage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           satAmount: satsAmount,
-          receiveAddress: process.env.NEXT_PUBLIC_DEFAULT_BASE_ADDRESS || "0x",
           merchant,
           qrisPayload: searchParams.get("payload") || "",
           idrAmount
@@ -104,6 +113,11 @@ export default function RoutePage() {
     <main className="app-shell">
       <h1 className="mb-2 text-2xl font-black text-gold">Review Route</h1>
       <p className="mb-6 text-sm text-zinc-300">Confirm fees, fund the route wallet, then start the swap.</p>
+      {arbitrumSafe ? (
+        <p className="mb-4 break-all text-xs text-zinc-500">
+          Boltz USDT receive (Arbitrum, WDK ERC-4337 Safe): {arbitrumSafe}
+        </p>
+      ) : null}
       <RoutePreview
         satsAmount={satsAmount}
         idrAmount={idrAmount}

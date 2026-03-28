@@ -42,3 +42,5 @@ next-env.d.ts
 /chrome-profiles/p2pm
 /backend/chrome-profiles
 /backend/boltz-debug-attempt.png
+/backend/boltz-debug-dropdown.png
+/backend/boltz-debug-networks.png

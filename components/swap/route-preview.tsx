@@ -24,8 +24,8 @@ export function RoutePreview({
       <div className="rounded-2xl border border-border bg-card p-4">
         <p className="text-xs uppercase tracking-wide text-zinc-400">Route Preview</p>
         <ul className="mt-3 space-y-2 text-sm text-zinc-200">
-          <li>1. Sats (LN) → USDT (Base) via Boltz</li>
-          <li>2. USDT → USDC (Base) via 0x/Uniswap</li>
+          <li>1. Sats (LN) → USDT (Arbitrum) via Boltz UI</li>
+          <li>2. USDT → USDC (e.g. Base) via 0x/Uniswap</li>
           <li>3. USDC → IDR via p2p.me</li>
         </ul>
         <div className="mt-4 text-sm">
