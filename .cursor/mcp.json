@@ -2,6 +2,12 @@
   "mcpServers": {
     "wdk-docs": {
       "url": "https://docs.wallet.tether.io/~gitbook/mcp"
+    },
+    "across-docs": {
+      "url": "https://mcp.across.to/mcp"
+    },
+    "lifi": {
+      "url": "https://mcp.li.quest/mcp"
     }
   }
 }

@@ -9,7 +9,9 @@ import { WalletAccountReadOnlyEvmErc4337 } from "@tetherto/wdk-wallet-evm-erc-43
 export const ARBITRUM_ONE_CHAIN_ID = 42161;
 
 /** BIP-44 path segment after `m/44'/60'/` (default first account). */
-const DEFAULT_DERIVATION = "0'/0/0";
+export const DEFAULT_WDK_EVM_PATH_SUFFIX = "0'/0/0";
+
+const DEFAULT_DERIVATION = DEFAULT_WDK_EVM_PATH_SUFFIX;
 
 const SAFE_MODULES_VERSION = "0.3.0" as const;
 
