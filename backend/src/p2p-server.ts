@@ -6,6 +6,7 @@
  *
  * Optional: set P2P_EXECUTOR_SECRET and send `Authorization: Bearer <secret>` (or header `X-P2P-Executor-Secret`).
  */
+import "./playwrightBrowsersPath.js";
 import "dotenv/config";
 import cors from "cors";
 import express from "express";
