@@ -3,25 +3,30 @@ export interface NwcWalletInfo {
   balanceSats: number;
 }
 
-export async function getNwcWalletInfo(connectionString: string): Promise<NwcWalletInfo> {
+export async function getNwcWalletInfo(
+  connectionString: string,
+): Promise<NwcWalletInfo> {
   if (!connectionString) {
     throw new Error("Missing NWC connection string.");
   }
 
-  const { nwc } = await import("@getalby/sdk");
-  const client = new nwc.NWCClient({ nostrWalletConnectUrl: connectionString });
+  const { NWCClient } = await import("@getalby/sdk");
+  const client = new NWCClient({ nostrWalletConnectUrl: connectionString });
   const info = await client.getInfo();
   const balance = await client.getBalance();
 
   return {
     alias: info.alias ?? "NWC Wallet",
-    balanceSats: Number(balance.balance ?? 0)
+    balanceSats: Number(balance.balance ?? 0),
   };
 }
 
-export async function payInvoiceWithNwc(connectionString: string, invoice: string): Promise<string> {
-  const { nwc } = await import("@getalby/sdk");
-  const client = new nwc.NWCClient({ nostrWalletConnectUrl: connectionString });
+export async function payInvoiceWithNwc(
+  connectionString: string,
+  invoice: string,
+): Promise<string> {
+  const { NWCClient } = await import("@getalby/sdk");
+  const client = new NWCClient({ nostrWalletConnectUrl: connectionString });
   const result = await client.payInvoice({ invoice });
 
   if (!result.preimage) {

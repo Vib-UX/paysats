@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { ReceiptCard } from "@/components/order/receipt-card";
 import { OfframpRouteExpandable } from "@/components/order/offramp-route-expandable";
@@ -8,7 +8,7 @@ import type { OfframpOrderFields } from "@/lib/offramp-route";
 
 const API_BASE = process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:8080";
 
-export default function ReceiptPage() {
+function ReceiptPage() {
   const searchParams = useSearchParams();
   const [order, setOrder] = useState<OfframpOrderFields | null>(null);
   const orderId = searchParams.get("orderId") || "";
@@ -40,5 +40,13 @@ export default function ReceiptPage() {
       />
       <OfframpRouteExpandable order={order} defaultOpen />
     </main>
+  );
+}
+
+export default function ReceiptPageWithSuspense() {
+  return (
+    <Suspense fallback={<main className="app-shell">Loading receipt…</main>}>
+      <ReceiptPage />
+    </Suspense>
   );
 }

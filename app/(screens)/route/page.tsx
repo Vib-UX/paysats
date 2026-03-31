@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { Suspense, useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { RoutePreview } from "@/components/swap/route-preview";
 import { InvoiceQrDisplay } from "@/components/wallet/invoice-qr-display";
@@ -13,7 +13,7 @@ type WebLnProvider = {
   sendPayment: (bolt11: string) => Promise<{ preimage?: string }>;
 };
 
-export default function RoutePage() {
+function RoutePage() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const [loadingInvoice, setLoadingInvoice] = useState(false);
@@ -151,5 +151,19 @@ export default function RoutePage() {
         </div>
       ) : null}
     </main>
+  );
+}
+
+export default function RoutePageWithSuspense() {
+  return (
+    <Suspense
+      fallback={
+        <main className="app-shell">
+          <p className="text-sm text-zinc-400">Loading…</p>
+        </main>
+      }
+    >
+      <RoutePage />
+    </Suspense>
   );
 }
