@@ -4,8 +4,12 @@
   "private": true,
   "scripts": {
     "dev": "tsx watch src/index.ts",
+    "p2p:executor": "tsx watch src/p2p-server.ts",
+    "p2p:executor:run": "tsx src/p2p-server.ts",
+    "p2p:nav-test": "tsx scripts/p2pm-nav-test.ts",
     "build": "tsc -p tsconfig.json",
     "start": "node dist/index.js",
+    "start:p2p-executor": "node dist/p2p-server.js",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev"
   },

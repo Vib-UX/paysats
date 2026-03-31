@@ -8,7 +8,6 @@ import {
 import { createBoltzSwap, getBoltzSwapStatus } from "./boltz.js";
 import { log } from "./logger.js";
 import { createInvoice, initNwc, payInvoice } from "./nwc.js";
-import { createP2pmSellOrder, getP2pmOrderStatus } from "./p2pm.js";
 import { prisma } from "./prisma.js";
 import { OrderState, requireTransition } from "./state.js";
 import { executeUsdtToUsdcSwap } from "./swap.js";
@@ -196,28 +195,6 @@ app.post("/api/swap/usdt-to-usdc", async (req, res) => {
     return res.json(result);
   } catch (error) {
     return res.status(500).json({ error: error instanceof Error ? error.message : "Swap execution failed" });
-  }
-});
-
-app.post("/api/p2pm/sell", async (req, res) => {
-  try {
-    const result = await createP2pmSellOrder({
-      usdcAmount: Number(req.body.usdcAmount),
-      payoutMethod: req.body.payoutMethod,
-      recipientDetails: String(req.body.recipientDetails || "")
-    });
-    return res.json(result);
-  } catch (error) {
-    return res.status(500).json({ error: error instanceof Error ? error.message : "Failed to place p2p.me sell" });
-  }
-});
-
-app.get("/api/p2pm/order-status/:orderId", async (req, res) => {
-  try {
-    const status = await getP2pmOrderStatus(req.params.orderId);
-    return res.json(status);
-  } catch (error) {
-    return res.status(500).json({ error: error instanceof Error ? error.message : "Failed to check p2p.me order" });
   }
 });
 

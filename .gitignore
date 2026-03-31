@@ -44,3 +44,5 @@ next-env.d.ts
 /backend/boltz-debug-attempt.png
 /backend/boltz-debug-dropdown.png
 /backend/boltz-debug-networks.png
+/backend/p2pm-debug*.png
+/backend/p2pm-debug/
