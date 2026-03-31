@@ -12,6 +12,54 @@ const PROFILE_PATH = "./chrome-profiles/boltz";
 const BOLTZ_URL = "https://beta.boltz.exchange/?sendAsset=LN&receiveAsset=USDT0";
 const BOLTZ_ORIGIN = "https://beta.boltz.exchange";
 
+const keptBoltzContexts: BrowserContext[] = [];
+
+async function bestEffortAutoClaim(context: BrowserContext, swapId: string, logFn: LogFn): Promise<void> {
+  const maxWaitMs = Math.max(0, Number(process.env.BOLTZ_AUTO_CLAIM_MAX_WAIT_MS || "300000") || 300_000);
+  const pollMs = Math.max(750, Number(process.env.BOLTZ_AUTO_CLAIM_POLL_MS || "2000") || 2_000);
+  const deadline = Date.now() + maxWaitMs;
+
+  const openClaimSelectors = [
+    'button:has-text("OPEN CLAIM TRANSACTION")',
+    'text=OPEN CLAIM TRANSACTION',
+    'button:has-text("Open claim transaction")',
+    'text=Open claim transaction'
+  ];
+
+  while (Date.now() < deadline) {
+    try {
+      // If the user opened extra tabs, pick the swap tab by URL match.
+      const pages = context.pages();
+      const swapPage =
+        pages.find((p) => p.url().includes(`/swap/${swapId}`)) ??
+        pages.find((p) => p.url().includes("/swap/")) ??
+        pages[0];
+      if (!swapPage) {
+        await delay(pollMs);
+        continue;
+      }
+
+      for (const sel of openClaimSelectors) {
+        const loc = swapPage.locator(sel).first();
+        const visible = await loc.isVisible().catch(() => false);
+        if (visible) {
+          logFn('Found "OPEN CLAIM TRANSACTION" — clicking…');
+          await loc.click({ timeout: 5000 });
+          await delay(1500);
+          const url = swapPage.url();
+          log.info("boltz", "auto-claim click done", { swapId, url });
+          return;
+        }
+      }
+    } catch (e) {
+      log.warn("boltz", "auto-claim watcher error (retrying)", { swapId, error: e instanceof Error ? e.message : String(e) });
+    }
+    await delay(pollMs);
+  }
+
+  log.info("boltz", "auto-claim watcher timed out (no OPEN CLAIM TRANSACTION found)", { swapId, maxWaitMs });
+}
+
 /** Same shape as your reference `BoltzSwapResult`. */
 export interface BoltzSwapResult {
   swapId: string;
@@ -201,7 +249,8 @@ export async function createBoltzSwapOnPage(
     logFn(`  Invoice copied successfully (${bolt11.length} chars)`);
     return { swapId, bolt11, satsAmount: finalSats, usdtAmount };
   } finally {
-    logFn("  Boltz page done (tab closed with context).");
+    // Intentionally do not close the tab/context here.
+    // The caller may keep the browser context open briefly after invoice copy so Boltz can continue routing liquidity.
   }
 }
 
@@ -215,7 +264,12 @@ export async function createBoltzSwap(input: {
   }
 
   const logFn = input.log || (() => {});
+  log.info("boltz", "createBoltzSwap start (UI automation)", {
+    satAmount: input.satAmount,
+    receiveAddressPrefix: `${input.receiveAddress.slice(0, 10)}…${input.receiveAddress.slice(-6)}`
+  });
   const headless = process.env.BOLTZ_HEADLESS !== "0";
+  const keepOpenMs = Math.max(0, Number(process.env.BOLTZ_KEEP_OPEN_MS || "120000") || 120_000);
   let lastError: Error | undefined;
   let attempts = 0;
 
@@ -227,6 +281,29 @@ export async function createBoltzSwap(input: {
     });
     try {
       const result = await createBoltzSwapOnPage(context, input.receiveAddress, input.satAmount, logFn);
+      log.info("boltz", "createBoltzSwap success", {
+        swapId: result.swapId,
+        satsAmount: result.satsAmount,
+        usdtAmount: result.usdtAmount,
+        boltzInvoicePrefix: result.bolt11.slice(0, 28) + (result.bolt11.length > 28 ? "…" : ""),
+        boltzInvoiceLen: result.bolt11.length
+      });
+      if (keepOpenMs > 0) {
+        logFn(`Keeping Boltz browser open for ~${Math.ceil(keepOpenMs / 1000)}s for routing...`);
+        keptBoltzContexts.push(context);
+        // While we keep it open, also try to click "OPEN CLAIM TRANSACTION" when it appears.
+        // This usually shows up after the LN invoice is paid and the swap is ready to be claimed.
+        bestEffortAutoClaim(context, result.swapId, logFn).catch(() => {});
+        setTimeout(() => {
+          const idx = keptBoltzContexts.indexOf(context);
+          if (idx >= 0) keptBoltzContexts.splice(idx, 1);
+          context
+            .close()
+            .then(() => log.info("boltz", "kept Boltz context closed after keep-open delay"))
+            .catch(() => {});
+        }, keepOpenMs);
+        (context as any).__paysats_keepOpen = true;
+      }
       return {
         invoice: result.bolt11,
         swapId: result.swapId,
@@ -247,7 +324,10 @@ export async function createBoltzSwap(input: {
       }
       await delay(10_000);
     } finally {
-      await context.close();
+      // Only close immediately if we are not intentionally keeping it open.
+      if (!(context as any).__paysats_keepOpen) {
+        await context.close();
+      }
     }
   }
   throw new Error("Unable to create Boltz swap.");

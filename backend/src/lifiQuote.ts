@@ -28,7 +28,8 @@ export type LifiQuoteResponse = {
 
 export async function fetchLifiQuote(params: {
   apiKey: string;
-  safeAddress: string;
+  fromAddress: string;
+  toAddress: string;
   fromAmount: string;
   slippage?: string;
 }): Promise<LifiQuoteResponse> {
@@ -38,8 +39,8 @@ export async function fetchLifiQuote(params: {
     fromToken: LIFI_USDT_ARBITRUM,
     toToken: LIFI_USDC_BASE,
     fromAmount: params.fromAmount,
-    fromAddress: params.safeAddress,
-    toAddress: params.safeAddress,
+    fromAddress: params.fromAddress,
+    toAddress: params.toAddress,
     slippage: params.slippage ?? "0.03"
   });
 

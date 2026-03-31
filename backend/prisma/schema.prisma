@@ -30,11 +30,22 @@ model Order {
   usdtAmount       Float?
   usdcAmount       Float?
   idrAmount        Float?
+  btcIdr           Float?
+  btcIdrFetchedAt  DateTime?
   boltzSwapId      String?
+  /** Boltz swap LN invoice (BOLT11) paid by the agent — for payment proof URLs. */
+  boltzLnInvoice   String?
+  /** Preimage from NWC after paying the Boltz invoice (pairs with boltzLnInvoice on validate-payment.com). */
+  boltzLnPreimage  String?
   boltzTxHash      String?
   swapTxHash       String?
   p2pmOrderId      String?
   p2pmPayoutMethod String?
+  payoutRecipient  String?
+  invoiceBolt11    String?
+  invoiceExpiresAt DateTime?
+  invoicePaidAt    DateTime?
+  invoicePaymentHash String?
   merchantName     String?
   qrisPayload      String?
   createdAt        DateTime   @default(now())

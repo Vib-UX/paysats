@@ -20,7 +20,8 @@
     "cors": "^2.8.5",
     "dotenv": "^16.4.5",
     "express": "^4.21.2",
-    "patchright": "^1.52.5"
+    "patchright": "^1.52.5",
+    "websocket-polyfill": "^0.0.3"
   },
   "devDependencies": {
     "@types/cors": "^2.8.17",

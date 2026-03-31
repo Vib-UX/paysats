@@ -3,12 +3,14 @@
 import { useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { ReceiptCard } from "@/components/order/receipt-card";
+import { OfframpRouteExpandable } from "@/components/order/offramp-route-expandable";
+import type { OfframpOrderFields } from "@/lib/offramp-route";
 
 const API_BASE = process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:8080";
 
 export default function ReceiptPage() {
   const searchParams = useSearchParams();
-  const [order, setOrder] = useState<any>(null);
+  const [order, setOrder] = useState<OfframpOrderFields | null>(null);
   const orderId = searchParams.get("orderId") || "";
 
   useEffect(() => {
@@ -24,7 +26,7 @@ export default function ReceiptPage() {
   }
 
   return (
-    <main className="app-shell">
+    <main className="app-shell space-y-4">
       <h1 className="mb-4 text-2xl font-black text-gold">Completed</h1>
       <ReceiptCard
         sats={order.satAmount || 0}
@@ -36,6 +38,7 @@ export default function ReceiptPage() {
         swapTxHash={order.swapTxHash || undefined}
         p2pmOrderId={order.p2pmOrderId || undefined}
       />
+      <OfframpRouteExpandable order={order} defaultOpen />
     </main>
   );
 }

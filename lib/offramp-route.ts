@@ -1,0 +1,264 @@
+/**
+ * Build expandable “route” hops for the offramp pipeline (LN → Boltz → LiFi → p2p.me → IDR).
+ */
+import { ORDER_STATES, type OrderState } from "@/lib/state";
+
+export type OfframpOrderFields = {
+  state?: OrderState | string | null;
+  satAmount?: number | null;
+  merchantName?: string | null;
+  invoicePaidAt?: string | null;
+  invoicePaymentHash?: string | null;
+  invoiceBolt11?: string | null;
+  boltzSwapId?: string | null;
+  /** BOLT11 for the Boltz swap (paid by agent). */
+  boltzLnInvoice?: string | null;
+  /** Preimage after NWC pays the Boltz invoice — pairs with boltzLnInvoice on validate-payment.com. */
+  boltzLnPreimage?: string | null;
+  boltzTxHash?: string | null;
+  swapTxHash?: string | null;
+  p2pmOrderId?: string | null;
+  p2pmPayoutMethod?: string | null;
+  payoutRecipient?: string | null;
+  idrAmount?: number | null;
+  usdtAmount?: number | null;
+  usdcAmount?: number | null;
+};
+
+export type RouteHopLink = { label: string; href: string };
+
+export type RouteHop = {
+  id: string;
+  title: string;
+  description: string;
+  status: "pending" | "active" | "done";
+  links: RouteHopLink[];
+};
+
+const BOLTZ_SWAP_BASE = "https://beta.boltz.exchange/swap/";
+const VALIDATE_PAYMENT_ORIGIN = "https://validate-payment.com/";
+const ARBISCAN_TX = "https://arbiscan.io/tx/";
+const P2P_APP = "https://app.p2p.me";
+const LIGHTNING_DECODER = "https://lightningdecoder.com/";
+
+/** @see https://validate-payment.com/ — invoice + preimage proof (same pattern as user funding proof). */
+function buildValidatePaymentProofHref(invoice: string, preimage: string): string {
+  const pre = preimage.replace(/^0x/i, "").trim();
+  return `${VALIDATE_PAYMENT_ORIGIN}?${new URLSearchParams({ invoice, preimage: pre }).toString()}`;
+}
+
+function idx(state: string): number {
+  const i = ORDER_STATES.indexOf(state as OrderState);
+  return i >= 0 ? i : 0;
+}
+
+/**
+ * When `state === FAILED`, the enum index is after every success state, so naive `si >= step`
+ * marks every hop as done. Infer real progress from persisted order fields instead.
+ */
+function progressIndexWhenFailed(order: OfframpOrderFields): number {
+  if (order.swapTxHash) return idx("USDC_SWAPPED");
+  if (order.p2pmOrderId) return idx("P2PM_ORDER_PLACED");
+  if (order.usdtAmount != null && order.usdtAmount > 0) return idx("USDT_RECEIVED");
+  if (order.boltzSwapId) return idx("BOLTZ_SWAP_PENDING");
+  if (order.invoicePaidAt) return idx("LN_INVOICE_PAID");
+  return idx("ROUTE_SHOWN");
+}
+
+/** Index used for linear hop progress. For FAILED orders, capped by on-chain / persisted evidence. */
+function effectiveStateIndex(order: OfframpOrderFields, stateStr: string): number {
+  const raw = idx(stateStr);
+  if (stateStr !== "FAILED") return raw;
+  return progressIndexWhenFailed(order);
+}
+
+export function maskPayoutRecipient(
+  method: string | null | undefined,
+  raw: string | null | undefined
+): string {
+  if (!raw) return "—";
+  const mth = (method || "").toLowerCase();
+  if (mth === "gopay") {
+    const m = raw.trim().match(/^(\+\d{1,3}-)(\d+)$/);
+    if (m && m[2].length >= 4) return `${m[1]}···${m[2].slice(-4)}`;
+    return "···";
+  }
+  const d = raw.replace(/\D/g, "");
+  if (d.length <= 4) return "····";
+  return `···${d.slice(-4)}`;
+}
+
+function payoutLabel(method: string | null | undefined): string {
+  const m = (method || "").toLowerCase();
+  if (m === "gopay") return "GoPay";
+  if (m === "bank_transfer") return "BCA";
+  return "Bank / wallet";
+}
+
+export function buildOfframpRouteHops(order: OfframpOrderFields | null | undefined): RouteHop[] {
+  if (!order) return [];
+
+  const stateStr = String(order.state || "ROUTE_SHOWN");
+  const si = effectiveStateIndex(order, stateStr);
+  const routeShown = idx("ROUTE_SHOWN");
+  const lnPaid = idx("LN_INVOICE_PAID");
+  const usdtRecv = idx("USDT_RECEIVED");
+  const usdcSwapped = idx("USDC_SWAPPED");
+  const failed = stateStr === "FAILED";
+
+  const hopStatus = (done: boolean, active: boolean): RouteHop["status"] => {
+    if (failed && !done) return "pending";
+    if (done) return "done";
+    if (active) return "active";
+    return "pending";
+  };
+
+  const swapTxReady = Boolean(order.swapTxHash?.trim());
+  /**
+   * p2p.me + BCA/GoPay hops: treat as done once LiFi USDT→USDC finished and we have the tx link
+   * (remaining work is merchant / fiat off-chain).
+   */
+  const tailMilestonesDone = !failed && swapTxReady;
+  const tailMilestonesActive =
+    !failed &&
+    !swapTxReady &&
+    (stateStr === "USDC_SWAPPED" ||
+      stateStr === "P2PM_ORDER_PLACED" ||
+      stateStr === "P2PM_ORDER_CONFIRMED" ||
+      stateStr === "IDR_SETTLED");
+
+  const fundingDone = Boolean(order.invoicePaidAt) || si > routeShown;
+  const boltzAgentDone = si >= usdtRecv;
+  const boltzAgentActive = si >= lnPaid && si < usdtRecv;
+
+  const liFiDone = si >= usdcSwapped;
+  const liFiActive = si >= usdtRecv && si < usdcSwapped;
+
+  const hops: RouteHop[] = [];
+
+  // 1. User’s Lightning invoice
+  const fundingLinks: RouteHopLink[] = [];
+  if (order.invoiceBolt11?.startsWith("ln")) {
+    fundingLinks.push({
+      label: "Decode funding invoice",
+      href: `${LIGHTNING_DECODER}?invoice=${encodeURIComponent(order.invoiceBolt11)}`
+    });
+  }
+
+  const fundingDesc =
+    fundingDone
+      ? `Funding invoice settled on Lightning.${
+          order.invoicePaymentHash
+            ? ` Payment hash: ${order.invoicePaymentHash.slice(0, 18)}…`
+            : ""
+        }`
+      : "Pay the QR invoice (or WebLN) to start the route.";
+
+  hops.push({
+    id: "funding-ln",
+    title: "Your Lightning payment",
+    description: fundingDesc,
+    status: hopStatus(fundingDone, !fundingDone && si <= routeShown),
+    links: fundingLinks
+  });
+
+  // 2. Agent pays Boltz swap invoice (LN → USDT Arbitrum)
+  const boltzLinks: RouteHopLink[] = [];
+  const boltzInv = order.boltzLnInvoice?.trim();
+  const boltzPre = order.boltzLnPreimage?.trim();
+  if (boltzInv?.startsWith("ln") && boltzPre) {
+    boltzLinks.push({
+      label: "Lightning payment proof (Boltz invoice)",
+      href: buildValidatePaymentProofHref(boltzInv, boltzPre)
+    });
+  } else if (order.boltzSwapId) {
+    boltzLinks.push({
+      label: "Boltz swap (status)",
+      href: `${BOLTZ_SWAP_BASE}${encodeURIComponent(order.boltzSwapId)}`
+    });
+  }
+  if (order.boltzTxHash) {
+    boltzLinks.push({ label: "On-chain (Boltz)", href: `${ARBISCAN_TX}${order.boltzTxHash}` });
+  }
+
+  hops.push({
+    id: "agent-boltz",
+    title: "Agent pays Boltz swap invoice",
+    description: boltzAgentDone
+      ? "Operator wallet paid the Boltz Lightning invoice; USDT routes to the agent address on Arbitrum."
+      : boltzAgentActive
+        ? "Paying Boltz invoice and confirming USDT on Arbitrum…"
+        : "Waiting for your Lightning payment first.",
+    status: hopStatus(boltzAgentDone, boltzAgentActive),
+    links: boltzLinks
+  });
+
+  // 3. LiFi USDT → USDC
+  const swapLinks: RouteHopLink[] = [];
+  if (order.swapTxHash) {
+    swapLinks.push({
+      label: "USDT → USDC (Arbitrum userOp / tx)",
+      href: `${ARBISCAN_TX}${order.swapTxHash}`
+    });
+  }
+
+  hops.push({
+    id: "lifi",
+    title: "LiFi: USDT → USDC (Arbitrum → Base)",
+    description: liFiDone
+      ? "Cross-chain swap submitted; USDC targets your Base recipient."
+      : liFiActive
+        ? "Quoting LiFi, approving USDT, executing bridge/swap…"
+        : "Runs after USDT is available on the agent Safe.",
+    status: hopStatus(liFiDone, liFiActive),
+    links: swapLinks
+  });
+
+  // 4. p2p.me merchant
+  const p2pLinks: RouteHopLink[] = [
+    { label: "p2p.me app", href: P2P_APP }
+  ];
+  if (order.p2pmOrderId) {
+    p2pLinks.unshift({
+      label: `Order ref · ${order.p2pmOrderId.slice(0, 14)}…`,
+      href: `${P2P_APP}/sell`
+    });
+  }
+
+  hops.push({
+    id: "p2p",
+    title: "p2p.me merchant (USDC → IDR)",
+    description: tailMilestonesDone
+      ? "USDC is in place after the LiFi swap (see link above). Merchant / IDR flow is wired from here."
+      : tailMilestonesActive
+        ? "Waiting for the USDT→USDC swap transaction link…"
+        : failed && order.p2pmOrderId
+          ? "p2p.me step did not finish; check the app or support with your order ref."
+          : "Starts after USDC is available for the offramp.",
+    status: hopStatus(tailMilestonesDone, tailMilestonesActive),
+    links: p2pLinks
+  });
+
+  // 5. Final IDR to BCA / GoPay
+  const mask = maskPayoutRecipient(order.p2pmPayoutMethod, order.payoutRecipient);
+  const pl = payoutLabel(order.p2pmPayoutMethod);
+  const idrN = order.idrAmount != null ? `Rp ${Number(order.idrAmount).toLocaleString("id-ID")}` : "IDR";
+
+  hops.push({
+    id: "fiat-settled",
+    title: `IDR settled · ${pl}`,
+    description: tailMilestonesDone
+      ? stateStr === "COMPLETED"
+        ? `Final payout complete. ${idrN} to ${pl} ${mask}.`
+        : `Payout path to ${pl} ${mask} — proceeds after USDC from the swap (LiFi link above).`
+      : tailMilestonesActive
+        ? `Waiting for swap confirmation and explorer link before marking ${pl} ${mask} ready.`
+        : failed
+          ? `Payout to ${pl} ${mask} was not completed. Check status or support.`
+          : `Destination: ${pl} ${mask}.`,
+    status: hopStatus(tailMilestonesDone, tailMilestonesActive),
+    links: []
+  });
+
+  return hops;
+}
