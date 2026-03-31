@@ -35,8 +35,9 @@ export type RouteHop = {
   links: RouteHopLink[];
 };
 
-const BOLTZ_SWAP_BASE = "https://beta.boltz.exchange/swap/";
 const VALIDATE_PAYMENT_ORIGIN = "https://validate-payment.com/";
+/** Swap + claim UI (automation waits for “OPEN CLAIM TRANSACTION” on this page). */
+const BOLTZ_BETA_SWAP_BASE = "https://beta.boltz.exchange/swap/";
 const ARBISCAN_TX = "https://arbiscan.io/tx/";
 const P2P_APP = "https://app.p2p.me";
 const LIGHTNING_DECODER = "https://lightningdecoder.com/";
@@ -45,6 +46,15 @@ const LIGHTNING_DECODER = "https://lightningdecoder.com/";
 function buildValidatePaymentProofHref(invoice: string, preimage: string): string {
   const pre = preimage.replace(/^0x/i, "").trim();
   return `${VALIDATE_PAYMENT_ORIGIN}?${new URLSearchParams({ invoice, preimage: pre }).toString()}`;
+}
+
+/** Invoice-only validation URL (preimage added on proof link once NWC returns it). */
+function buildValidatePaymentInvoiceHref(invoice: string): string {
+  return `${VALIDATE_PAYMENT_ORIGIN}?${new URLSearchParams({ invoice }).toString()}`;
+}
+
+function boltzBetaSwapPageHref(swapId: string): string {
+  return `${BOLTZ_BETA_SWAP_BASE}${encodeURIComponent(swapId)}`;
 }
 
 function idx(state: string): number {
@@ -171,10 +181,22 @@ export function buildOfframpRouteHops(order: OfframpOrderFields | null | undefin
       label: "Lightning payment proof (Boltz invoice)",
       href: buildValidatePaymentProofHref(boltzInv, boltzPre)
     });
-  } else if (order.boltzSwapId) {
+  } else if (boltzInv?.startsWith("ln")) {
     boltzLinks.push({
-      label: "Boltz swap (status)",
-      href: `${BOLTZ_SWAP_BASE}${encodeURIComponent(order.boltzSwapId)}`
+      label: "Lightning invoice (validate-payment.com)",
+      href: buildValidatePaymentInvoiceHref(boltzInv)
+    });
+  }
+  const boltzSid = order.boltzSwapId?.trim();
+  if (boltzSid) {
+    const swapPage = boltzBetaSwapPageHref(boltzSid);
+    boltzLinks.push({
+      label: "beta.boltz.exchange (swap)",
+      href: swapPage
+    });
+    boltzLinks.push({
+      label: "Open claim transaction",
+      href: swapPage
     });
   }
   if (order.boltzTxHash) {
