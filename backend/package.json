@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
+    "postinstall": "node scripts/ensure-patchright-browsers.cjs",
     "dev": "tsx watch src/index.ts",
     "p2p:executor": "tsx watch src/p2p-server.ts",
     "p2p:executor:run": "tsx src/p2p-server.ts",
