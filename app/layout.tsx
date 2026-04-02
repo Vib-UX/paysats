@@ -6,6 +6,14 @@ export const metadata: Metadata = {
   title: "Paysats — Lightning to IDR",
   description: "Pay with Lightning, receive IDR to your bank or e-wallet. Built for merchants and spenders.",
   manifest: "/manifest.webmanifest",
+  icons: {
+    icon: [
+      { url: "/icon.svg", type: "image/svg+xml", sizes: "any" },
+      { url: "/icon-192.png", sizes: "192x192", type: "image/png" },
+      { url: "/icon-512.png", sizes: "512x512", type: "image/png" }
+    ],
+    apple: [{ url: "/apple-touch-icon.png", sizes: "180x180", type: "image/png" }]
+  },
   appleWebApp: {
     capable: true,
     title: "Paysats",
