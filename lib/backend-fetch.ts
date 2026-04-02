@@ -8,7 +8,7 @@ export const BACKEND_URL = (
   process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:8080"
 ).replace(/\/$/, "");
 
-function useNgrokBypass(): boolean {
+function isNgrokBackendUrl(): boolean {
   return /ngrok/i.test(BACKEND_URL);
 }
 
@@ -16,7 +16,7 @@ function useNgrokBypass(): boolean {
 export function backendFetch(path: string, init?: RequestInit): Promise<Response> {
   const url = `${BACKEND_URL}${path.startsWith("/") ? path : `/${path}`}`;
   const headers = new Headers(init?.headers);
-  if (useNgrokBypass()) {
+  if (isNgrokBackendUrl()) {
     headers.set(NGROK_SKIP_HEADER, "true");
   }
   return fetch(url, { ...init, headers });
