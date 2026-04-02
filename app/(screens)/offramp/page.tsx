@@ -422,7 +422,8 @@ export default function OfframpPage() {
             <div className="flex items-baseline gap-3">
               <input
                 type="text"
-                inputMode="numeric"
+                inputMode="decimal"
+                enterKeyHint="done"
                 value={primaryValue}
                 onChange={(e) => {
                   const v = digitsOnly(e.target.value);
@@ -518,8 +519,10 @@ export default function OfframpPage() {
           </label>
           <div className="mt-1 grid grid-cols-[1fr_auto] gap-2">
             <input
-              type={payoutMethod === "gopay" ? "password" : "text"}
-              inputMode="numeric"
+              type={payoutMethod === "gopay" ? "tel" : "text"}
+              inputMode={payoutMethod === "gopay" ? "tel" : "numeric"}
+              autoComplete={payoutMethod === "gopay" ? "tel" : "off"}
+              enterKeyHint="done"
               placeholder={payoutMethod === "gopay" ? "+CC-NNN…" : "xxxxxxxxxx"}
               value={recipient}
               onChange={(e) => setRecipient(e.target.value)}

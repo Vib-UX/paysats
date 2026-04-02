@@ -60,7 +60,8 @@ export function InvoiceFundForm() {
           type="number"
           min={1}
           step={1}
-          inputMode="numeric"
+          inputMode="decimal"
+          enterKeyHint="done"
           value={amountSats}
           onChange={(e) => setAmountSats(e.target.value)}
           className="tap-target w-full rounded-xl border border-border bg-card px-4 py-3 text-lg font-bold text-white outline-none focus:border-gold"
