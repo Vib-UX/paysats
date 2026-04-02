@@ -1,13 +1,46 @@
 "use client";
 
-import { useMemo, useState } from "react";
-import { buildOfframpRouteHops, type OfframpOrderFields } from "@/lib/offramp-route";
+import { useCallback, useMemo, useState } from "react";
+import { buildOfframpRouteHops, type OfframpOrderFields, type RouteHopLink } from "@/lib/offramp-route";
 
 type Props = {
   order: OfframpOrderFields | null | undefined;
   defaultOpen?: boolean;
   className?: string;
 };
+
+function HopLinkRow({ link }: { link: RouteHopLink }) {
+  const [copied, setCopied] = useState(false);
+  const showCopy = link.href.includes("arbiscan.io/tx/");
+  const copy = useCallback(() => {
+    void navigator.clipboard.writeText(link.href).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    });
+  }, [link.href]);
+
+  return (
+    <li className="flex flex-wrap items-center gap-2">
+      <a
+        href={link.href}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="inline-flex rounded-lg border border-gold/35 bg-black/25 px-2.5 py-1 text-[11px] font-bold text-gold underline-offset-2 hover:border-gold/60 hover:underline"
+      >
+        {link.label}
+      </a>
+      {showCopy ? (
+        <button
+          type="button"
+          onClick={copy}
+          className="rounded-lg border border-zinc-600 bg-zinc-900/80 px-2 py-1 text-[10px] font-bold uppercase tracking-wide text-zinc-300 hover:border-zinc-500 hover:text-zinc-100"
+        >
+          {copied ? "Copied" : "Copy link"}
+        </button>
+      ) : null}
+    </li>
+  );
+}
 
 function StatusDot({ status }: { status: "pending" | "active" | "done" }) {
   if (status === "done") {
@@ -64,18 +97,9 @@ export function OfframpRouteExpandable({ order, defaultOpen = false, className =
                   <p className="text-sm font-bold text-zinc-100">{hop.title}</p>
                   <p className="mt-1 text-xs leading-relaxed text-zinc-500">{hop.description}</p>
                   {hop.links.length > 0 ? (
-                    <ul className="mt-2 flex flex-wrap gap-2">
+                    <ul className="mt-2 flex flex-col gap-2">
                       {hop.links.map((link) => (
-                        <li key={link.href}>
-                          <a
-                            href={link.href}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="inline-flex rounded-lg border border-gold/35 bg-black/25 px-2.5 py-1 text-[11px] font-bold text-gold underline-offset-2 hover:border-gold/60 hover:underline"
-                          >
-                            {link.label}
-                          </a>
-                        </li>
+                        <HopLinkRow key={`${link.label}-${link.href}`} link={link} />
                       ))}
                     </ul>
                   ) : null}

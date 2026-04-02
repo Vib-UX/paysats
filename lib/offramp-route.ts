@@ -10,6 +10,8 @@ export type OfframpOrderFields = {
   invoicePaidAt?: string | null;
   invoicePaymentHash?: string | null;
   invoiceBolt11?: string | null;
+  /** User funding invoice preimage when known (e.g. WebLN on client — not always on server). */
+  invoiceLnPreimage?: string | null;
   boltzSwapId?: string | null;
   /** BOLT11 for the Boltz swap (paid by agent). */
   boltzLnInvoice?: string | null;
@@ -40,7 +42,6 @@ const VALIDATE_PAYMENT_ORIGIN = "https://validate-payment.com/";
 const BOLTZ_BETA_SWAP_BASE = "https://beta.boltz.exchange/swap/";
 const ARBISCAN_TX = "https://arbiscan.io/tx/";
 const P2P_APP = "https://app.p2p.me";
-const LIGHTNING_DECODER = "https://lightningdecoder.com/";
 
 /** @see https://validate-payment.com/ — invoice + preimage proof (same pattern as user funding proof). */
 function buildValidatePaymentProofHref(invoice: string, preimage: string): string {
@@ -148,10 +149,17 @@ export function buildOfframpRouteHops(order: OfframpOrderFields | null | undefin
 
   // 1. User’s Lightning invoice
   const fundingLinks: RouteHopLink[] = [];
-  if (order.invoiceBolt11?.startsWith("ln")) {
+  const fundInv = order.invoiceBolt11?.trim();
+  const fundPre = order.invoiceLnPreimage?.trim();
+  if (fundInv?.startsWith("ln") && fundPre) {
     fundingLinks.push({
-      label: "Decode funding invoice",
-      href: `${LIGHTNING_DECODER}?invoice=${encodeURIComponent(order.invoiceBolt11)}`
+      label: "Lightning payment proof (funding)",
+      href: buildValidatePaymentProofHref(fundInv, fundPre)
+    });
+  } else if (fundInv?.startsWith("ln")) {
+    fundingLinks.push({
+      label: "Lightning invoice (validate-payment.com)",
+      href: buildValidatePaymentInvoiceHref(fundInv)
     });
   }
 
@@ -189,18 +197,16 @@ export function buildOfframpRouteHops(order: OfframpOrderFields | null | undefin
   }
   const boltzSid = order.boltzSwapId?.trim();
   if (boltzSid) {
-    const swapPage = boltzBetaSwapPageHref(boltzSid);
     boltzLinks.push({
-      label: "beta.boltz.exchange (swap)",
-      href: swapPage
-    });
-    boltzLinks.push({
-      label: "Open claim transaction",
-      href: swapPage
+      label: "View swap on Boltz",
+      href: boltzBetaSwapPageHref(boltzSid)
     });
   }
   if (order.boltzTxHash) {
-    boltzLinks.push({ label: "On-chain (Boltz)", href: `${ARBISCAN_TX}${order.boltzTxHash}` });
+    boltzLinks.push({
+      label: "Open claim transaction (Arbiscan)",
+      href: `${ARBISCAN_TX}${order.boltzTxHash}`
+    });
   }
 
   hops.push({

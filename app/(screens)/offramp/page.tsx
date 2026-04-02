@@ -324,17 +324,18 @@ export default function OfframpPage() {
     orderDetail.state !== "COMPLETED";
   const pipelineFailed = orderDetail?.state === "FAILED";
 
-  /** Merge live bolt11 + form payout hints until API snapshot catches up. */
+  /** Merge live bolt11, WebLN preimage, and form payout hints until API snapshot catches up. */
   const routeOrder: OfframpOrderFields | null = useMemo(() => {
+    if (!orderDetail && !bolt11) return null;
     const base = orderDetail ?? ({ state: "ROUTE_SHOWN" } as OfframpOrderFields);
-    if (!bolt11) return orderDetail;
     return {
       ...base,
-      invoiceBolt11: base.invoiceBolt11 || bolt11,
+      invoiceBolt11: base.invoiceBolt11 || bolt11 || undefined,
+      invoiceLnPreimage: lightningPaymentPreimage?.trim() || base.invoiceLnPreimage || undefined,
       p2pmPayoutMethod: base.p2pmPayoutMethod || payoutMethod,
       payoutRecipient: base.payoutRecipient || recipientNormalized || undefined
     };
-  }, [orderDetail, bolt11, payoutMethod, recipientNormalized]);
+  }, [orderDetail, bolt11, lightningPaymentPreimage, payoutMethod, recipientNormalized]);
 
   const paymentProofHref =
     bolt11 && lightningPaymentPreimage ? buildValidatePaymentProofUrl(bolt11, lightningPaymentPreimage) : null;

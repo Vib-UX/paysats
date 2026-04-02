@@ -388,7 +388,16 @@ async function watchInvoiceAndRunOfframpPipeline(params: {
     const boltz = await createBoltzSwap({
       satAmount: params.satAmount,
       receiveAddress,
-      log: (msg) => log.info("boltz", msg, { orderId: params.orderId })
+      log: (msg) => log.info("boltz", msg, { orderId: params.orderId }),
+      onBoltzClaimTxHash: (txHash) => {
+        const mem = memoryOrders.get(params.orderId);
+        if (mem) {
+          memoryOrders.set(params.orderId, { ...mem, boltzTxHash: txHash, updatedAt: nowIso() });
+        }
+        prisma.order
+          .update({ where: { id: params.orderId }, data: { boltzTxHash: txHash } })
+          .catch(() => {});
+      }
     });
     log.info("pipeline", "Boltz swap created — have Boltz pay invoice to complete swap", {
       orderId: params.orderId,
@@ -909,7 +918,12 @@ app.post("/api/boltz/create-swap", async (req, res) => {
     const swap = await createBoltzSwap({
       satAmount,
       receiveAddress,
-      log: (msg) => log.info("boltz", msg)
+      log: (msg) => log.info("boltz", msg),
+      onBoltzClaimTxHash: (txHash) => {
+        void prisma.order
+          .updateMany({ where: { boltzSwapId: swap.swapId }, data: { boltzTxHash: txHash } })
+          .catch(() => {});
+      }
     });
     log.info("api", "boltz swap created", { swapId: swap.swapId, invoiceLen: swap.invoice?.length });
     const order = await prisma.order.create({

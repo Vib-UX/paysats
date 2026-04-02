@@ -14,7 +14,129 @@ const BOLTZ_ORIGIN = "https://beta.boltz.exchange";
 
 const keptBoltzContexts: BrowserContext[] = [];
 
-async function bestEffortAutoClaim(context: BrowserContext, swapId: string, logFn: LogFn): Promise<void> {
+function txHashFromArbiscanHref(href: string): string | null {
+  const m = href.match(/arbiscan\.io\/tx\/(0x[a-fA-F0-9]{64})/i);
+  return m ? m[1] : null;
+}
+
+/** Boltz opens the Arbiscan tx page (new tab or same tab) — read from any page URL or DOM. */
+async function pollClaimTxHashFromPages(context: BrowserContext, logFn: LogFn): Promise<string | undefined> {
+  const maxMs = Math.max(10_000, Number(process.env.BOLTZ_CLAIM_TX_POLL_MS || "120000") || 120_000);
+  const pollMs = Math.max(500, Number(process.env.BOLTZ_CLAIM_TX_POLL_INTERVAL_MS || "2000") || 2_000);
+  const deadline = Date.now() + maxMs;
+  while (Date.now() < deadline) {
+    for (const page of context.pages()) {
+      try {
+        const urlTx = txHashFromArbiscanHref(page.url());
+        if (urlTx) {
+          logFn(`Captured Arbiscan tx from page URL: ${page.url().slice(0, 72)}…`);
+          return urlTx;
+        }
+        const hrefs = await page.evaluate(() => {
+          const out: string[] = [];
+          document.querySelectorAll('a[href*="arbiscan.io/tx/"]').forEach((a) => {
+            const h = a.getAttribute("href");
+            if (h) out.push(h);
+          });
+          return out;
+        });
+        for (const h of hrefs) {
+          const tx = txHashFromArbiscanHref(h);
+          if (tx) {
+            logFn(`Captured Arbiscan claim tx from page link: ${tx.slice(0, 10)}…`);
+            return tx;
+          }
+        }
+      } catch {
+        /* ignore */
+      }
+    }
+    await delay(pollMs);
+  }
+  return undefined;
+}
+
+/**
+ * Clicking "Open claim transaction" on beta.boltz opens the Arbiscan tx URL (new tab or navigation).
+ * We capture the same URL Boltz uses: page URL first, then href on the control, then DOM scan.
+ */
+async function captureArbiscanTxFromClaimClick(
+  context: BrowserContext,
+  swapPage: Page,
+  claimLoc: import("patchright").Locator,
+  logFn: LogFn
+): Promise<string | undefined> {
+  const captureMs = Math.max(8000, Number(process.env.BOLTZ_CLAIM_URL_CAPTURE_MS || "60000") || 60_000);
+  const fastPollMs = Math.max(100, Number(process.env.BOLTZ_CLAIM_URL_FAST_POLL_MS || "250") || 250);
+
+  // Often the control is (or wraps) <a href="https://arbiscan.io/tx/0x…">
+  try {
+    const href = await claimLoc.evaluate((el: Element) => {
+      const node = el as HTMLElement;
+      const direct =
+        node.tagName === "A" ? node.getAttribute("href") : node.closest("a")?.getAttribute("href") ?? null;
+      if (direct?.includes("arbiscan.io/tx/")) return direct;
+      const inner = node.querySelector?.("a[href*='arbiscan.io/tx/']");
+      return inner?.getAttribute("href") ?? null;
+    });
+    if (href) {
+      const tx = txHashFromArbiscanHref(href);
+      if (tx) {
+        logFn(`Arbiscan link on claim control (before click): ${href.slice(0, 72)}…`);
+        return tx;
+      }
+    }
+  } catch {
+    /* ignore */
+  }
+
+  await claimLoc.click({ timeout: 5000 });
+  log.info("boltz", "open claim transaction clicked — watching for Arbiscan URL (new tab or navigation)", {
+    swapUrl: swapPage.url().slice(0, 80)
+  });
+
+  // Click opens the same Arbiscan tx URL Boltz uses — catch it from any tab's location or from <a href> once rendered
+  const deadline = Date.now() + captureMs;
+  while (Date.now() < deadline) {
+    for (const page of context.pages()) {
+      try {
+        const u = page.url();
+        const fromUrl = txHashFromArbiscanHref(u);
+        if (fromUrl) {
+          log.info("boltz", "captured Arbiscan tx URL after claim click", { url: u.slice(0, 120) });
+          return fromUrl;
+        }
+        const hrefs = await page.evaluate(() => {
+          const out: string[] = [];
+          document.querySelectorAll('a[href*="arbiscan.io/tx/"]').forEach((a) => {
+            const h = a.getAttribute("href");
+            if (h) out.push(h);
+          });
+          return out;
+        });
+        for (const h of hrefs) {
+          const tx = txHashFromArbiscanHref(h);
+          if (tx) {
+            log.info("boltz", "captured Arbiscan href from DOM after claim click", { href: h.slice(0, 120) });
+            return tx;
+          }
+        }
+      } catch {
+        /* ignore */
+      }
+    }
+    await delay(fastPollMs);
+  }
+
+  return pollClaimTxHashFromPages(context, logFn);
+}
+
+async function bestEffortAutoClaim(
+  context: BrowserContext,
+  swapId: string,
+  logFn: LogFn,
+  onClaimTxHash?: (txHash: string) => void
+): Promise<void> {
   const maxWaitMs = Math.max(0, Number(process.env.BOLTZ_AUTO_CLAIM_MAX_WAIT_MS || "300000") || 300_000);
   const pollMs = Math.max(750, Number(process.env.BOLTZ_AUTO_CLAIM_POLL_MS || "2000") || 2_000);
   const deadline = Date.now() + maxWaitMs;
@@ -43,11 +165,12 @@ async function bestEffortAutoClaim(context: BrowserContext, swapId: string, logF
         const loc = swapPage.locator(sel).first();
         const visible = await loc.isVisible().catch(() => false);
         if (visible) {
-          logFn('Found "OPEN CLAIM TRANSACTION" — clicking…');
-          await loc.click({ timeout: 5000 });
-          await delay(1500);
-          const url = swapPage.url();
-          log.info("boltz", "auto-claim click done", { swapId, url });
+          logFn('Found "OPEN CLAIM TRANSACTION" — opening link and capturing Arbiscan tx…');
+          const txHash = await captureArbiscanTxFromClaimClick(context, swapPage, loc, logFn);
+          if (txHash) {
+            log.info("boltz", "claim transaction hash captured for frontend", { swapId, txHash });
+            onClaimTxHash?.(txHash);
+          }
           return;
         }
       }
@@ -258,6 +381,8 @@ export async function createBoltzSwap(input: {
   satAmount: number;
   receiveAddress: string;
   log?: LogFn;
+  /** Fires when auto-claim finds an Arbiscan tx link after clicking OPEN CLAIM TRANSACTION. */
+  onBoltzClaimTxHash?: (txHash: string) => void;
 }): Promise<{ invoice: string; swapId: string; satsAmount: string; usdtAmount: string }> {
   if (input.satAmount <= 0) {
     throw new Error("satAmount must be greater than 0");
@@ -293,7 +418,7 @@ export async function createBoltzSwap(input: {
         keptBoltzContexts.push(context);
         // While we keep it open, also try to click "OPEN CLAIM TRANSACTION" when it appears.
         // This usually shows up after the LN invoice is paid and the swap is ready to be claimed.
-        bestEffortAutoClaim(context, result.swapId, logFn).catch(() => {});
+        bestEffortAutoClaim(context, result.swapId, logFn, input.onBoltzClaimTxHash).catch(() => {});
         setTimeout(() => {
           const idx = keptBoltzContexts.indexOf(context);
           if (idx >= 0) keptBoltzContexts.splice(idx, 1);
