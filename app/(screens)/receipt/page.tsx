@@ -4,9 +4,8 @@ import { Suspense, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { ReceiptCard } from "@/components/order/receipt-card";
 import { OfframpRouteExpandable } from "@/components/order/offramp-route-expandable";
+import { backendFetch } from "@/lib/backend-fetch";
 import type { OfframpOrderFields } from "@/lib/offramp-route";
-
-const API_BASE = process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:8080";
 
 function ReceiptPage() {
   const searchParams = useSearchParams();
@@ -16,7 +15,7 @@ function ReceiptPage() {
   useEffect(() => {
     if (!orderId) return;
 
-    fetch(`${API_BASE}/api/order/${orderId}/status`)
+    backendFetch(`/api/order/${orderId}/status`)
       .then((response) => response.json())
       .then((data) => setOrder(data));
   }, [orderId]);

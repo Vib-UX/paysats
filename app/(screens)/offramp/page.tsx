@@ -15,10 +15,9 @@ import {
   type OfframpSection
 } from "@/components/offramp-section-tabs";
 import { TetherMark } from "@/components/tether-mark";
+import { backendFetch } from "@/lib/backend-fetch";
 import type { OfframpOrderFields } from "@/lib/offramp-route";
 import { ORDER_STATES, type OrderState } from "@/lib/state";
-
-const API_BASE = process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:8080";
 
 /** After USDT→USDC completes (swap tx link available), wait this long before showing the success checkmark. */
 const POST_SWAP_SUCCESS_DELAY_MS =
@@ -161,7 +160,7 @@ export default function OfframpPage() {
     async function loadQuote() {
       try {
         setQuoteError("");
-        const res = await fetch(`${API_BASE}/api/quote/btc-idr`);
+        const res = await backendFetch("/api/quote/btc-idr");
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || "Quote failed");
         const next = Number(data.btcIdr);
@@ -242,7 +241,7 @@ export default function OfframpPage() {
           ? { idrAmount: idrNum, payoutMethod, recipientDetails: recipientNormalized }
           : { satAmount: satsNum, payoutMethod, recipientDetails: recipientNormalized };
 
-      const res = await fetch(`${API_BASE}/api/offramp/create`, {
+      const res = await backendFetch("/api/offramp/create", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body)
@@ -278,7 +277,7 @@ export default function OfframpPage() {
 
     async function poll() {
       try {
-        const res = await fetch(`${API_BASE}/api/order/${encodeURIComponent(oid)}/status`);
+        const res = await backendFetch(`/api/order/${encodeURIComponent(oid)}/status`);
         if (!res.ok || cancelled) return;
         const data = await res.json();
         if (cancelled) return;

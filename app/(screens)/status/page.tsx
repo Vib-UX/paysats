@@ -7,8 +7,7 @@ import type { OfframpOrderFields } from "@/lib/offramp-route";
 import { ProgressBar } from "@/components/ui/progress-bar";
 import { OrderTimeline } from "@/components/order/order-timeline";
 import { OfframpRouteExpandable } from "@/components/order/offramp-route-expandable";
-
-const API_BASE = process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:8080";
+import { backendFetch } from "@/lib/backend-fetch";
 
 function StatusPage() {
   const router = useRouter();
@@ -21,7 +20,7 @@ function StatusPage() {
     if (!orderId) return;
 
     const interval = setInterval(async () => {
-      const response = await fetch(`${API_BASE}/api/order/${orderId}/status`);
+      const response = await backendFetch(`/api/order/${orderId}/status`);
       if (!response.ok) {
         return;
       }

@@ -5,8 +5,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { RoutePreview } from "@/components/swap/route-preview";
 import { InvoiceQrDisplay } from "@/components/wallet/invoice-qr-display";
 import { Button } from "@/components/ui/button";
-
-const API_BASE = process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:8080";
+import { backendFetch } from "@/lib/backend-fetch";
 
 type WebLnProvider = {
   enable: () => Promise<void>;
@@ -31,7 +30,7 @@ function RoutePage() {
   const satsAmount = useMemo(() => Math.max(1, Math.ceil(idrAmount / 2)), [idrAmount]);
 
   useEffect(() => {
-    fetch(`${API_BASE}/api/wallet/arbitrum-receive-address`)
+    backendFetch("/api/wallet/arbitrum-receive-address")
       .then((r) => r.json())
       .then((data) => {
         if (typeof data.safeAddress === "string") setArbitrumSafe(data.safeAddress);
@@ -56,7 +55,7 @@ function RoutePage() {
     setBalanceMsat(null);
     setWalletAlias(null);
     try {
-      const topupResponse = await fetch(`${API_BASE}/api/nwc/create-invoice`, {
+      const topupResponse = await backendFetch("/api/nwc/create-invoice", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -85,7 +84,7 @@ function RoutePage() {
     setLoadingSwap(true);
     setFlowError("");
     try {
-      const response = await fetch(`${API_BASE}/api/boltz/create-swap`, {
+      const response = await backendFetch("/api/boltz/create-swap", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({

@@ -4,8 +4,7 @@ import { FormEvent, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { InvoiceQrDisplay } from "@/components/wallet/invoice-qr-display";
-
-const API_BASE = process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:8080";
+import { backendFetch } from "@/lib/backend-fetch";
 
 export function InvoiceFundForm() {
   const router = useRouter();
@@ -29,7 +28,7 @@ export function InvoiceFundForm() {
     setLoading(true);
     setBolt11(null);
     try {
-      const response = await fetch(`${API_BASE}/api/nwc/create-invoice`, {
+      const response = await backendFetch("/api/nwc/create-invoice", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
