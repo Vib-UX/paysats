@@ -12,7 +12,7 @@ import {
   hashForSection,
   OfframpSectionTabs,
   sectionFromHash,
-  type OfframpSection
+  type OfframpSection,
 } from "@/components/offramp-section-tabs";
 import { TetherMark } from "@/components/tether-mark";
 import { backendFetch } from "@/lib/backend-fetch";
@@ -29,10 +29,12 @@ const SWAP_SUCCESS_STATES = new Set<OrderState | string>([
   "P2PM_ORDER_PLACED",
   "P2PM_ORDER_CONFIRMED",
   "IDR_SETTLED",
-  "COMPLETED"
+  "COMPLETED",
 ]);
 
-function isSwapSuccessMilestone(order: OfframpOrderFields | null | undefined): boolean {
+function isSwapSuccessMilestone(
+  order: OfframpOrderFields | null | undefined,
+): boolean {
   if (!order?.swapTxHash?.trim()) return false;
   const st = String(order.state || "");
   if (st === "FAILED") return false;
@@ -40,7 +42,10 @@ function isSwapSuccessMilestone(order: OfframpOrderFields | null | undefined): b
 }
 
 /** Third-party Lightning payment verifier (invoice + preimage). @see https://validate-payment.com/ */
-function buildValidatePaymentProofUrl(invoice: string, preimage: string): string {
+function buildValidatePaymentProofUrl(
+  invoice: string,
+  preimage: string,
+): string {
   const pre = preimage.replace(/^0x/i, "").trim();
   const q = new URLSearchParams({ invoice, preimage: pre });
   return `https://validate-payment.com/?${q.toString()}`;
@@ -99,12 +104,12 @@ function isFundingInvoiceSettled(order: OfframpOrderFields | null): boolean {
 export default function OfframpPage() {
   const router = useRouter();
 
-  const [payoutMethod, setPayoutMethod] = useState<PayoutMethod>("bank_transfer");
+  const [payoutMethod, setPayoutMethod] =
+    useState<PayoutMethod>("bank_transfer");
   const [recipient, setRecipient] = useState("");
 
   const [btcIdr, setBtcIdr] = useState<number | null>(null);
   const [usdcIdr, setUsdcIdr] = useState<number | null>(null);
-  const [fetchedAt, setFetchedAt] = useState<string | null>(null);
   const [quoteError, setQuoteError] = useState("");
 
   const [idr, setIdr] = useState<string>("100000");
@@ -118,16 +123,22 @@ export default function OfframpPage() {
   const [orderId, setOrderId] = useState<string | null>(null);
   const [invoiceOpen, setInvoiceOpen] = useState(false);
   const [invoicePaying, setInvoicePaying] = useState(false);
-  const [orderDetail, setOrderDetail] = useState<OfframpOrderFields | null>(null);
+  const [orderDetail, setOrderDetail] = useState<OfframpOrderFields | null>(
+    null,
+  );
   /** Set when WebLN returns a preimage — used for validate-payment.com proof link. */
-  const [lightningPaymentPreimage, setLightningPaymentPreimage] = useState<string | null>(null);
+  const [lightningPaymentPreimage, setLightningPaymentPreimage] = useState<
+    string | null
+  >(null);
   /** Shown after POST_SWAP_SUCCESS_DELAY_MS once swap tx is available (see poll). */
   const [showPaymentSuccess, setShowPaymentSuccess] = useState(false);
 
   const [section, setSection] = useState<OfframpSection>("pay");
 
   const paymentSuccessDelayStartedRef = useRef(false);
-  const paymentSuccessTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const paymentSuccessTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null,
+  );
 
   const idrNum = useMemo(() => Number(digitsOnly(idr) || "0"), [idr]);
   const satsNum = useMemo(() => Number(digitsOnly(sats) || "0"), [sats]);
@@ -152,7 +163,10 @@ export default function OfframpPage() {
     return Number.isFinite(satsNum) && satsNum > 0;
   }, [idrNum, satsNum, lastEdited]);
 
-  const canPay = useMemo(() => amountValid && recipientValid && !loadingPay, [amountValid, recipientValid, loadingPay]);
+  const canPay = useMemo(
+    () => amountValid && recipientValid && !loadingPay,
+    [amountValid, recipientValid, loadingPay],
+  );
 
   useEffect(() => {
     let mounted = true;
@@ -164,12 +178,12 @@ export default function OfframpPage() {
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || "Quote failed");
         const next = Number(data.btcIdr);
-        if (!Number.isFinite(next) || next <= 0) throw new Error("Invalid quote");
+        if (!Number.isFinite(next) || next <= 0)
+          throw new Error("Invalid quote");
         if (!mounted) return;
         setBtcIdr(next);
         const nextUsdc = Number(data.usdcIdr);
         setUsdcIdr(Number.isFinite(nextUsdc) && nextUsdc > 0 ? nextUsdc : null);
-        setFetchedAt(typeof data.fetchedAt === "string" ? data.fetchedAt : null);
       } catch (e) {
         if (!mounted) return;
         setQuoteError(e instanceof Error ? e.message : "Quote failed");
@@ -215,7 +229,9 @@ export default function OfframpPage() {
   async function payViaWebln(invoice: string): Promise<{ preimage?: string }> {
     const provider = (window as unknown as { webln?: WebLnProvider }).webln;
     if (!provider) {
-      throw new Error("WebLN not available. Install/enable Alby or pay using the QR in another wallet.");
+      throw new Error(
+        "WebLN not available. Install/enable Alby or pay using the QR in another wallet.",
+      );
     }
     await provider.enable();
     return provider.sendPayment(invoice);
@@ -238,13 +254,21 @@ export default function OfframpPage() {
     try {
       const body =
         lastEdited === "idr"
-          ? { idrAmount: idrNum, payoutMethod, recipientDetails: recipientNormalized }
-          : { satAmount: satsNum, payoutMethod, recipientDetails: recipientNormalized };
+          ? {
+              idrAmount: idrNum,
+              payoutMethod,
+              recipientDetails: recipientNormalized,
+            }
+          : {
+              satAmount: satsNum,
+              payoutMethod,
+              recipientDetails: recipientNormalized,
+            };
 
       const res = await backendFetch("/api/offramp/create", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body)
+        body: JSON.stringify(body),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Failed to create invoice.");
@@ -277,14 +301,19 @@ export default function OfframpPage() {
 
     async function poll() {
       try {
-        const res = await backendFetch(`/api/order/${encodeURIComponent(oid)}/status`);
+        const res = await backendFetch(
+          `/api/order/${encodeURIComponent(oid)}/status`,
+        );
         if (!res.ok || cancelled) return;
         const data = await res.json();
         if (cancelled) return;
         const snapshot = data as OfframpOrderFields;
         setOrderDetail(snapshot);
 
-        if (isSwapSuccessMilestone(snapshot) && !paymentSuccessDelayStartedRef.current) {
+        if (
+          isSwapSuccessMilestone(snapshot) &&
+          !paymentSuccessDelayStartedRef.current
+        ) {
           paymentSuccessDelayStartedRef.current = true;
           paymentSuccessTimerRef.current = setTimeout(() => {
             if (cancelled) return;
@@ -309,7 +338,8 @@ export default function OfframpPage() {
   }, [orderId, invoiceOpen, router]);
 
   useEffect(() => {
-    if (!showPaymentSuccess || orderDetail?.state !== "COMPLETED" || !orderId) return;
+    if (!showPaymentSuccess || orderDetail?.state !== "COMPLETED" || !orderId)
+      return;
     const oid = orderId;
     const t = setTimeout(() => {
       router.push(`/receipt?orderId=${encodeURIComponent(oid)}`);
@@ -327,21 +357,32 @@ export default function OfframpPage() {
   /** Merge live bolt11, WebLN preimage, and form payout hints until API snapshot catches up. */
   const routeOrder: OfframpOrderFields | null = useMemo(() => {
     if (!orderDetail && !bolt11) return null;
-    const base = orderDetail ?? ({ state: "ROUTE_SHOWN" } as OfframpOrderFields);
+    const base =
+      orderDetail ?? ({ state: "ROUTE_SHOWN" } as OfframpOrderFields);
     return {
       ...base,
       invoiceBolt11: base.invoiceBolt11 || bolt11 || undefined,
-      invoiceLnPreimage: lightningPaymentPreimage?.trim() || base.invoiceLnPreimage || undefined,
+      invoiceLnPreimage:
+        lightningPaymentPreimage?.trim() || base.invoiceLnPreimage || undefined,
       p2pmPayoutMethod: base.p2pmPayoutMethod || payoutMethod,
-      payoutRecipient: base.payoutRecipient || recipientNormalized || undefined
+      payoutRecipient: base.payoutRecipient || recipientNormalized || undefined,
     };
-  }, [orderDetail, bolt11, lightningPaymentPreimage, payoutMethod, recipientNormalized]);
+  }, [
+    orderDetail,
+    bolt11,
+    lightningPaymentPreimage,
+    payoutMethod,
+    recipientNormalized,
+  ]);
 
   const paymentProofHref =
-    bolt11 && lightningPaymentPreimage ? buildValidatePaymentProofUrl(bolt11, lightningPaymentPreimage) : null;
+    bolt11 && lightningPaymentPreimage
+      ? buildValidatePaymentProofUrl(bolt11, lightningPaymentPreimage)
+      : null;
 
   const primaryCurrency = activeCurrency;
-  const primaryValue = primaryCurrency === "idr" ? formatIdrDotsFromDigits(idr) : sats;
+  const primaryValue =
+    primaryCurrency === "idr" ? formatIdrDotsFromDigits(idr) : sats;
   const primaryLabel = primaryCurrency === "idr" ? "IDR" : "sats";
   const secondaryPreview = useMemo(() => {
     if (!btcIdr) return null;
@@ -354,219 +395,303 @@ export default function OfframpPage() {
   return (
     <main className="mx-auto w-full max-w-lg px-4 pb-16 pt-2">
       <div className="mb-6">
-        <h1 className="text-2xl font-black leading-tight text-white">Lightning in. Rupiah out.</h1>
+        <h1 className="text-2xl font-black leading-tight text-white">
+          Lightning in. Rupiah out.
+        </h1>
         <p className="mt-3 text-sm leading-relaxed text-zinc-400">
-          Settle BTC over Lightning into IDR. Pay the LN invoice; we route liquidity via stablecoins to BCA or GoPay.
+          Settle BTC over Lightning into IDR. Pay the LN invoice; we route
+          liquidity via stablecoins to BCA or GoPay.
         </p>
         <div className="mt-3 flex items-start gap-2.5 text-xs leading-relaxed text-zinc-500">
           <TetherMark size={24} className="mt-0.5" />
           <p>
-            <span className="font-semibold text-zinc-400">Powered by Tether.</span> Merchant-side settlement uses Tether
-            WDK with USDT on-chain; agent routing runs Boltz (LN→USDT), LiFi (USDT→USDC), then local IDR rails.
+            <span className="font-semibold text-zinc-400">
+              Powered by Tether.
+            </span>{" "}
+            Merchant-side settlement uses Tether WDK with USDT on-chain; agent
+            routing runs Boltz (LN→USDT), LiFi (USDT→USDC), then local IDR
+            rails.
           </p>
         </div>
       </div>
 
-      <OfframpSectionTabs value={section} onChange={goToSection} className="mb-6" />
+      <OfframpSectionTabs
+        value={section}
+        onChange={goToSection}
+        className="mb-6"
+      />
 
       {section === "pay" ? (
-      <div className="space-y-4">
-        <div className="rounded-2xl border border-border bg-card p-4">
-          <div className="flex items-center justify-between">
-            <p className="text-xs uppercase tracking-wide text-zinc-400">Amount to settle</p>
-            <div className="flex items-center gap-2">
-              <button
-                type="button"
-                onClick={() => {
-                  setActiveCurrency("idr");
-                  setLastEdited("idr");
-                }}
-                className={`tap-target rounded-full border px-4 py-3 text-sm font-extrabold uppercase tracking-wide ${
-                  primaryCurrency === "idr" ? "border-gold text-gold" : "border-border text-zinc-300"
-                }`}
-              >
-                IDR
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setActiveCurrency("sats");
-                  setLastEdited("sats");
-                }}
-                className={`tap-target rounded-full border px-4 py-3 text-sm font-extrabold uppercase tracking-wide ${
-                  primaryCurrency === "sats" ? "border-gold text-gold" : "border-border text-zinc-300"
-                }`}
-              >
-                sats
-              </button>
-              <button
-                type="button"
-                aria-label="Swap IDR/sats input"
-                onClick={() => {
-                  const next = activeCurrency === "idr" ? "sats" : "idr";
-                  setActiveCurrency(next);
-                  setLastEdited(next);
-                }}
-                className="tap-target grid place-items-center rounded-full border border-border bg-transparent px-4 py-3 text-zinc-200"
-              >
-                {/* up/down swap icon */}
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                  <path d="M8 7h10m0 0-3-3m3 3-3 3" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-                  <path d="M16 17H6m0 0 3 3m-3-3 3-3" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-                </svg>
-              </button>
-            </div>
-          </div>
-
-          <div className="mt-6 flex flex-col items-center justify-center gap-2">
-            <div className="flex items-baseline gap-3">
-              <input
-                type="text"
-                inputMode="decimal"
-                enterKeyHint="done"
-                value={primaryValue}
-                onChange={(e) => {
-                  const v = digitsOnly(e.target.value);
-                  setLastEdited(primaryCurrency);
-                  if (primaryCurrency === "idr") setIdr(v);
-                  else setSats(v);
-                }}
-                className="w-[12ch] bg-transparent text-center text-6xl font-black tracking-tight text-zinc-100 outline-none"
-                aria-label={`${primaryLabel} amount`}
-              />
-              <span className="text-xl font-extrabold tracking-wide text-zinc-300">{primaryLabel}</span>
-            </div>
-            <div className="text-sm text-zinc-400">
-              {secondaryPreview ? <span>≈ {secondaryPreview}</span> : <span>Loading quote…</span>}
-            </div>
-          </div>
-
-          <button
-            type="button"
-            className="tap-target mt-6 flex w-full items-center justify-between rounded-2xl border border-border bg-black/20 px-4 py-4 text-left"
-          >
-            <div className="flex items-center gap-3">
-              {/* wallet icon */}
-              <span className="grid h-10 w-10 place-items-center rounded-xl border border-border bg-black/30 text-zinc-200">
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                  <path
-                    d="M3 7.5A3.5 3.5 0 0 1 6.5 4h11A3.5 3.5 0 0 1 21 7.5v9A3.5 3.5 0 0 1 17.5 20h-11A3.5 3.5 0 0 1 3 16.5v-9Z"
-                    stroke="currentColor"
-                    strokeWidth="2"
-                    strokeLinejoin="round"
-                  />
-                  <path d="M21 9h-5a2 2 0 0 0 0 4h5" stroke="currentColor" strokeWidth="2" strokeLinejoin="round" />
-                  <path d="M16.5 11h.01" stroke="currentColor" strokeWidth="3" strokeLinecap="round" />
-                </svg>
-              </span>
-              <div className="leading-tight">
-                <p className="text-sm font-semibold text-zinc-300">Per-order limit</p>
-                <p className="text-sm font-black text-zinc-100">
-                  <span className="text-gold">100</span> USDC
-                </p>
-                {btcIdr && usdcIdr ? (
-                  <p className="mt-0.5 text-xs text-zinc-400">
-                    ≈{" "}
-                    {formatIdr(
-                      Math.ceil(((100 * usdcIdr) / btcIdr) * 1e8)
-                    )}{" "}
-                    sats
-                  </p>
-                ) : null}
+        <div className="space-y-4">
+          <div className="rounded-2xl border border-border bg-card p-4">
+            <div className="flex items-center justify-between">
+              <p className="text-xs uppercase tracking-wide text-zinc-400">
+                Amount to settle
+              </p>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setActiveCurrency("idr");
+                    setLastEdited("idr");
+                  }}
+                  className={`tap-target rounded-full border px-4 py-3 text-sm font-extrabold uppercase tracking-wide ${
+                    primaryCurrency === "idr"
+                      ? "border-gold text-gold"
+                      : "border-border text-zinc-300"
+                  }`}
+                >
+                  IDR
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setActiveCurrency("sats");
+                    setLastEdited("sats");
+                  }}
+                  className={`tap-target rounded-full border px-4 py-3 text-sm font-extrabold uppercase tracking-wide ${
+                    primaryCurrency === "sats"
+                      ? "border-gold text-gold"
+                      : "border-border text-zinc-300"
+                  }`}
+                >
+                  sats
+                </button>
+                <button
+                  type="button"
+                  aria-label="Swap IDR/sats input"
+                  onClick={() => {
+                    const next = activeCurrency === "idr" ? "sats" : "idr";
+                    setActiveCurrency(next);
+                    setLastEdited(next);
+                  }}
+                  className="tap-target grid place-items-center rounded-full border border-border bg-transparent px-4 py-3 text-zinc-200"
+                >
+                  {/* up/down swap icon */}
+                  <svg
+                    width="18"
+                    height="18"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    aria-hidden="true"
+                  >
+                    <path
+                      d="M8 7h10m0 0-3-3m3 3-3 3"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    />
+                    <path
+                      d="M16 17H6m0 0 3 3m-3-3 3-3"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    />
+                  </svg>
+                </button>
               </div>
             </div>
-            <span className="text-xl font-black text-zinc-400">{">"}</span>
-          </button>
 
-          <div className="mt-6 text-center text-xs text-zinc-500">
-            {btcIdr ? (
-              <p>
-                1 BTC ≈ <span className="text-zinc-300">IDR {formatIdr(Math.round(btcIdr))}</span>
-                {fetchedAt ? <span> (as of {new Date(fetchedAt).toLocaleTimeString("id-ID")})</span> : null}
+            <div className="mt-6 flex flex-col items-center justify-center gap-2">
+              <div className="flex items-baseline gap-3">
+                <input
+                  type="text"
+                  inputMode="decimal"
+                  enterKeyHint="done"
+                  value={primaryValue}
+                  onChange={(e) => {
+                    const v = digitsOnly(e.target.value);
+                    setLastEdited(primaryCurrency);
+                    if (primaryCurrency === "idr") setIdr(v);
+                    else setSats(v);
+                  }}
+                  className="w-[12ch] bg-transparent text-center text-6xl font-black tracking-tight text-zinc-100 outline-none"
+                  aria-label={`${primaryLabel} amount`}
+                />
+                <span className="text-xl font-extrabold tracking-wide text-zinc-300">
+                  {primaryLabel}
+                </span>
+              </div>
+              <div className="text-sm text-zinc-400">
+                {secondaryPreview ? (
+                  <span>≈ {secondaryPreview}</span>
+                ) : (
+                  <span>Loading quote…</span>
+                )}
+              </div>
+            </div>
+
+            <button
+              type="button"
+              className="tap-target mt-6 flex w-full items-center justify-between rounded-2xl border border-border bg-black/20 px-4 py-4 text-left"
+            >
+              <div className="flex items-center gap-3">
+                {/* wallet icon */}
+                <span className="grid h-10 w-10 place-items-center rounded-xl border border-border bg-black/30 text-zinc-200">
+                  <svg
+                    width="18"
+                    height="18"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    aria-hidden="true"
+                  >
+                    <path
+                      d="M3 7.5A3.5 3.5 0 0 1 6.5 4h11A3.5 3.5 0 0 1 21 7.5v9A3.5 3.5 0 0 1 17.5 20h-11A3.5 3.5 0 0 1 3 16.5v-9Z"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                      strokeLinejoin="round"
+                    />
+                    <path
+                      d="M21 9h-5a2 2 0 0 0 0 4h5"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                      strokeLinejoin="round"
+                    />
+                    <path
+                      d="M16.5 11h.01"
+                      stroke="currentColor"
+                      strokeWidth="3"
+                      strokeLinecap="round"
+                    />
+                  </svg>
+                </span>
+                <div className="leading-tight">
+                  <p className="text-sm font-semibold text-zinc-300">
+                    Per-order limit
+                  </p>
+                  <p className="text-sm font-black text-zinc-100">
+                    <span className="text-gold">100</span> USDC
+                  </p>
+                  {btcIdr && usdcIdr ? (
+                    <p className="mt-0.5 text-xs text-zinc-400">
+                      ≈ {formatIdr(Math.ceil(((100 * usdcIdr) / btcIdr) * 1e8))}{" "}
+                      sats
+                    </p>
+                  ) : null}
+                </div>
+              </div>
+              <span className="text-xl font-black text-zinc-400">{">"}</span>
+            </button>
+
+            <div className="mt-6 text-center text-xs text-zinc-500">
+              {btcIdr ? (
+                <p>
+                  1 BTC ≈{" "}
+                  <span className="text-zinc-300">
+                    IDR {formatIdr(Math.round(btcIdr))}
+                  </span>
+                </p>
+              ) : null}
+              {quoteError ? (
+                <p className="mt-1 text-red-400">{quoteError}</p>
+              ) : null}
+              <p className="mt-1">
+                IDR amounts round up to the next sat so the invoice always
+                covers the IDR you entered.
+              </p>
+            </div>
+          </div>
+
+          <div className="rounded-2xl border border-border bg-card p-4">
+            <p className="mb-3 text-xs uppercase tracking-wide text-zinc-400">
+              Where to send IDR
+            </p>
+
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                onClick={() => setPayoutMethod("bank_transfer")}
+                className={`tap-target rounded-xl border px-3 py-2 text-sm font-bold ${
+                  payoutMethod === "bank_transfer"
+                    ? "border-gold text-gold"
+                    : "border-border text-zinc-300"
+                }`}
+              >
+                BCA
+              </button>
+              <button
+                type="button"
+                onClick={() => setPayoutMethod("gopay")}
+                className={`tap-target rounded-xl border px-3 py-2 text-sm font-bold ${
+                  payoutMethod === "gopay"
+                    ? "border-gold text-gold"
+                    : "border-border text-zinc-300"
+                }`}
+              >
+                GoPay
+              </button>
+            </div>
+
+            <label className="mt-4 block text-sm font-semibold text-zinc-300">
+              {payoutMethod === "gopay"
+                ? "GoPay mobile number"
+                : "BCA account number"}
+            </label>
+            <div className="mt-1 grid grid-cols-[1fr_auto] gap-2">
+              <input
+                type={payoutMethod === "gopay" ? "tel" : "text"}
+                inputMode={payoutMethod === "gopay" ? "tel" : "numeric"}
+                autoComplete={payoutMethod === "gopay" ? "tel" : "off"}
+                enterKeyHint="done"
+                placeholder={
+                  payoutMethod === "gopay" ? "+CC-NNN…" : "xxxxxxxxxx"
+                }
+                value={recipient}
+                onChange={(e) => setRecipient(e.target.value)}
+                className="tap-target w-full rounded-xl border border-border bg-card px-4 py-3 text-lg font-bold text-white outline-none focus:border-gold"
+              />
+              <button
+                type="button"
+                onClick={() => router.push("/scan")}
+                className="tap-target whitespace-nowrap rounded-xl border border-border bg-transparent px-3 py-3 text-sm font-bold text-zinc-200"
+              >
+                Scan QR
+              </button>
+            </div>
+            {!recipientValid && recipient ? (
+              <p className="mt-2 text-xs text-red-400">
+                {payoutMethod === "gopay"
+                  ? "Enter GoPay number in +CC-NNN… format."
+                  : "Enter a valid BCA account number."}
               </p>
             ) : null}
-            {quoteError ? <p className="mt-1 text-red-400">{quoteError}</p> : null}
-            <p className="mt-1">IDR amounts round up to the next sat so the invoice always covers the IDR you entered.</p>
-          </div>
-        </div>
-
-        <div className="rounded-2xl border border-border bg-card p-4">
-          <p className="mb-3 text-xs uppercase tracking-wide text-zinc-400">Where to send IDR</p>
-
-          <div className="grid grid-cols-2 gap-2">
-            <button
-              type="button"
-              onClick={() => setPayoutMethod("bank_transfer")}
-              className={`tap-target rounded-xl border px-3 py-2 text-sm font-bold ${
-                payoutMethod === "bank_transfer" ? "border-gold text-gold" : "border-border text-zinc-300"
-              }`}
-            >
-              BCA
-            </button>
-            <button
-              type="button"
-              onClick={() => setPayoutMethod("gopay")}
-              className={`tap-target rounded-xl border px-3 py-2 text-sm font-bold ${
-                payoutMethod === "gopay" ? "border-gold text-gold" : "border-border text-zinc-300"
-              }`}
-            >
-              GoPay
-            </button>
-          </div>
-
-          <label className="mt-4 block text-sm font-semibold text-zinc-300">
-            {payoutMethod === "gopay" ? "GoPay mobile number" : "BCA account number"}
-          </label>
-          <div className="mt-1 grid grid-cols-[1fr_auto] gap-2">
-            <input
-              type={payoutMethod === "gopay" ? "tel" : "text"}
-              inputMode={payoutMethod === "gopay" ? "tel" : "numeric"}
-              autoComplete={payoutMethod === "gopay" ? "tel" : "off"}
-              enterKeyHint="done"
-              placeholder={payoutMethod === "gopay" ? "+CC-NNN…" : "xxxxxxxxxx"}
-              value={recipient}
-              onChange={(e) => setRecipient(e.target.value)}
-              className="tap-target w-full rounded-xl border border-border bg-card px-4 py-3 text-lg font-bold text-white outline-none focus:border-gold"
-            />
-            <button
-              type="button"
-              onClick={() => router.push("/scan")}
-              className="tap-target whitespace-nowrap rounded-xl border border-border bg-transparent px-3 py-3 text-sm font-bold text-zinc-200"
-            >
-              Scan QR
-            </button>
-          </div>
-          {!recipientValid && recipient ? (
-            <p className="mt-2 text-xs text-red-400">
-              {payoutMethod === "gopay"
-                ? "Enter GoPay number in +CC-NNN… format."
-                : "Enter a valid BCA account number."}
+            <p className="mt-2 text-xs text-zinc-500">
+              Need to read a merchant QRIS first? Use Scan — your payout details
+              here are still BCA or GoPay.
             </p>
-          ) : null}
-          <p className="mt-2 text-xs text-zinc-500">
-            Need to read a merchant QRIS first? Use Scan — your payout details here are still BCA or GoPay.
-          </p>
-        </div>
+          </div>
 
-        <Button type="button" onClick={onPay} loading={loadingPay} disabled={!canPay} className="gold-gradient">
-          {payoutMethod === "gopay" ? "Pay (GoPay payout)" : "Pay (BCA payout)"}
-        </Button>
-        {error ? <p className="text-sm text-red-400">{error}</p> : null}
-      </div>
+          <Button
+            type="button"
+            onClick={onPay}
+            loading={loadingPay}
+            disabled={!canPay}
+            className="gold-gradient"
+          >
+            {payoutMethod === "gopay"
+              ? "Pay (GoPay payout)"
+              : "Pay (BCA payout)"}
+          </Button>
+          {error ? <p className="text-sm text-red-400">{error}</p> : null}
+        </div>
       ) : null}
 
       {section === "how" ? <HowItWorks className="mt-0" /> : null}
       {section === "gifts" ? <GiftCardsSection className="mt-0" /> : null}
-      {section === "merchant" ? <MerchantCta className="mt-0 scroll-mt-24" /> : null}
+      {section === "merchant" ? (
+        <MerchantCta className="mt-0 scroll-mt-24" />
+      ) : null}
 
       {section === "pay" ? (
-      <footer className="mt-12 border-t border-border pt-6 text-center text-xs leading-relaxed text-zinc-600">
-        Paysats — Lightning settlement for Indonesia
-        <div className="mt-3 flex flex-wrap items-center justify-center gap-x-2 gap-y-1 text-zinc-500">
-          <TetherMark size={18} />
-          <span>Powered by Tether · WDK · Boltz · LiFi</span>
-        </div>
-      </footer>
+        <footer className="mt-12 border-t border-border pt-6 text-center text-xs leading-relaxed text-zinc-600">
+          Paysats — Lightning settlement for Indonesia
+          <div className="mt-3 flex flex-wrap items-center justify-center gap-x-2 gap-y-1 text-zinc-500">
+            <TetherMark size={18} />
+            <span>Powered by Tether · WDK · Boltz · LiFi</span>
+          </div>
+        </footer>
       ) : null}
 
       {invoiceOpen && bolt11 ? (
@@ -577,7 +702,9 @@ export default function OfframpPage() {
         >
           <div className="w-full max-w-md space-y-4 rounded-2xl border border-border bg-zinc-950 p-4 shadow-2xl">
             <div className="flex items-center justify-between">
-              <p className="text-sm font-bold text-zinc-200">Pay with Lightning</p>
+              <p className="text-sm font-bold text-zinc-200">
+                Pay with Lightning
+              </p>
               <button
                 type="button"
                 onClick={() => setInvoiceOpen(false)}
@@ -589,15 +716,21 @@ export default function OfframpPage() {
 
             {pipelineFailed ? (
               <div className="space-y-4 py-2 text-center">
-                <p className="text-sm font-bold text-red-400">Something went wrong</p>
+                <p className="text-sm font-bold text-red-400">
+                  Something went wrong
+                </p>
                 <p className="text-sm text-zinc-400">
-                  The order did not complete. You can view details on the status page or contact support with your order
-                  ID.
+                  The order did not complete. You can view details on the status
+                  page or contact support with your order ID.
                 </p>
                 {orderId ? (
                   <Button
                     type="button"
-                    onClick={() => router.push(`/status?orderId=${encodeURIComponent(orderId)}`)}
+                    onClick={() =>
+                      router.push(
+                        `/status?orderId=${encodeURIComponent(orderId)}`,
+                      )
+                    }
                     className="gold-gradient"
                   >
                     View status
@@ -617,16 +750,33 @@ export default function OfframpPage() {
             ) : fundingSettled ? (
               showPaymentSuccess ? (
                 <div className="space-y-5 py-6 text-center">
-                  <div className="mx-auto grid h-20 w-20 place-items-center rounded-full bg-gold/20 text-gold" aria-hidden>
-                    <svg className="h-11 w-11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
-                      <path d="M20 6L9 17l-5-5" strokeLinecap="round" strokeLinejoin="round" />
+                  <div
+                    className="mx-auto grid h-20 w-20 place-items-center rounded-full bg-gold/20 text-gold"
+                    aria-hidden
+                  >
+                    <svg
+                      className="h-11 w-11"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2.5"
+                    >
+                      <path
+                        d="M20 6L9 17l-5-5"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      />
                     </svg>
                   </div>
                   <div>
-                    <p className="text-xl font-black text-zinc-100">Payment successful</p>
+                    <p className="text-xl font-black text-zinc-100">
+                      Payment successful
+                    </p>
                     <p className="mt-2 text-sm leading-relaxed text-zinc-400">
                       Lightning payment and on-chain swap are complete
-                      {orderDetail?.state === "COMPLETED" ? " — redirecting to receipt…" : "."}
+                      {orderDetail?.state === "COMPLETED"
+                        ? " — redirecting to receipt…"
+                        : "."}
                     </p>
                   </div>
                   {orderDetail?.swapTxHash ? (
@@ -649,11 +799,17 @@ export default function OfframpPage() {
                       Lightning payment proof
                     </a>
                   ) : null}
-                  {routeOrder ? <OfframpRouteExpandable order={routeOrder} defaultOpen /> : null}
+                  {routeOrder ? (
+                    <OfframpRouteExpandable order={routeOrder} defaultOpen />
+                  ) : null}
                   {orderId ? (
                     <Button
                       type="button"
-                      onClick={() => router.push(`/status?orderId=${encodeURIComponent(orderId)}`)}
+                      onClick={() =>
+                        router.push(
+                          `/status?orderId=${encodeURIComponent(orderId)}`,
+                        )
+                      }
                       className="border border-border bg-transparent text-zinc-200"
                     >
                       Order details
@@ -669,14 +825,19 @@ export default function OfframpPage() {
                     />
                   </div>
                   <div className="space-y-2">
-                    <p className="text-base font-black text-zinc-100">Settling your payout</p>
+                    <p className="text-base font-black text-zinc-100">
+                      Settling your payout
+                    </p>
                     <p className="text-sm leading-relaxed text-zinc-400">
                       Your Lightning payment is in. Routing to IDR usually takes{" "}
-                      <span className="font-semibold text-zinc-300">about one to two minutes</span>.
+                      <span className="font-semibold text-zinc-300">
+                        about one to two minutes
+                      </span>
+                      .
                     </p>
                     <p className="text-xs text-zinc-500">
-                      Funds move through automated swaps and payout partners (Boltz, LiFi, and your chosen rail) in the
-                      background.
+                      Funds move through automated swaps and payout partners
+                      (Boltz, LiFi, and your chosen rail) in the background.
                       {isSwapSuccessMilestone(orderDetail)
                         ? ` USDC swap is in — success screen in ~${Math.ceil(POST_SWAP_SUCCESS_DELAY_MS / 1000)}s…`
                         : null}
@@ -685,7 +846,11 @@ export default function OfframpPage() {
                   {orderId ? (
                     <button
                       type="button"
-                      onClick={() => router.push(`/status?orderId=${encodeURIComponent(orderId)}`)}
+                      onClick={() =>
+                        router.push(
+                          `/status?orderId=${encodeURIComponent(orderId)}`,
+                        )
+                      }
                       className="tap-target w-full rounded-xl px-4 py-3 text-sm font-bold text-zinc-400 transition hover:text-zinc-200"
                     >
                       Detailed progress
@@ -702,7 +867,8 @@ export default function OfframpPage() {
                     </a>
                   ) : (
                     <p className="text-center text-[11px] text-zinc-500">
-                      Paid with another wallet? Copy the preimage from your wallet and verify at{" "}
+                      Paid with another wallet? Copy the preimage from your
+                      wallet and verify at{" "}
                       <a
                         href="https://validate-payment.com/"
                         target="_blank"
@@ -714,12 +880,17 @@ export default function OfframpPage() {
                       .
                     </p>
                   )}
-                  {routeOrder ? <OfframpRouteExpandable order={routeOrder} defaultOpen /> : null}
+                  {routeOrder ? (
+                    <OfframpRouteExpandable order={routeOrder} defaultOpen />
+                  ) : null}
                 </div>
               )
             ) : (
               <>
-                <InvoiceQrDisplay bolt11={bolt11} amountSats={Number(digitsOnly(sats) || "0") || undefined} />
+                <InvoiceQrDisplay
+                  bolt11={bolt11}
+                  amountSats={Number(digitsOnly(sats) || "0") || undefined}
+                />
 
                 <div className="space-y-2">
                   <Button
@@ -734,7 +905,9 @@ export default function OfframpPage() {
                           const pre = res?.preimage?.trim();
                           if (pre) setLightningPaymentPreimage(pre);
                         })
-                        .catch((e) => setError(e instanceof Error ? e.message : String(e)))
+                        .catch((e) =>
+                          setError(e instanceof Error ? e.message : String(e)),
+                        )
                         .finally(() => setInvoicePaying(false));
                     }}
                     className="border border-gold bg-transparent text-gold hover:bg-gold/10"
@@ -754,15 +927,19 @@ export default function OfframpPage() {
                   {orderId ? (
                     <Button
                       type="button"
-                      onClick={() => router.push(`/status?orderId=${encodeURIComponent(orderId)}`)}
+                      onClick={() =>
+                        router.push(
+                          `/status?orderId=${encodeURIComponent(orderId)}`,
+                        )
+                      }
                       className="gold-gradient"
                     >
                       View status
                     </Button>
                   ) : null}
                   <p className="text-center text-xs text-zinc-500">
-                    After the invoice is paid, settlement runs automatically: Lightning → stablecoins → IDR to your
-                    account.
+                    After the invoice is paid, settlement runs automatically:
+                    Lightning → stablecoins → IDR to your account.
                   </p>
                   {!paymentProofHref ? (
                     <p className="text-center text-[11px] text-zinc-500">
@@ -778,7 +955,9 @@ export default function OfframpPage() {
                       using your invoice and preimage.
                     </p>
                   ) : null}
-                  {routeOrder ? <OfframpRouteExpandable order={routeOrder} /> : null}
+                  {routeOrder ? (
+                    <OfframpRouteExpandable order={routeOrder} />
+                  ) : null}
                 </div>
               </>
             )}
@@ -788,4 +967,3 @@ export default function OfframpPage() {
     </main>
   );
 }
-
