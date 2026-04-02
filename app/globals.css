@@ -39,10 +39,24 @@ body {
     background: linear-gradient(120deg, var(--gold), var(--orange));
   }
 
+  /**
+   * Gradient fill for text (wordmark “Pay”). Use instead of gold-gradient + bg-clip-text — that combo often breaks on
+   * iOS Safari and shows a solid gradient box instead of letter shapes.
+   */
+  .text-gradient-gold {
+    display: inline-block;
+    background-image: linear-gradient(120deg, var(--gold), var(--orange));
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+    color: transparent;
+  }
+
   .app-shell {
     width: 100%;
-    max-width: 375px;
+    max-width: 32rem;
     margin: 0 auto;
-    padding: 16px;
+    padding: 1rem;
+    padding-bottom: 4rem;
   }
 }

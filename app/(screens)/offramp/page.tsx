@@ -1,10 +1,20 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { InvoiceQrDisplay } from "@/components/wallet/invoice-qr-display";
 import { OfframpRouteExpandable } from "@/components/order/offramp-route-expandable";
+import { GiftCardsSection } from "@/components/gift-cards-section";
+import { HowItWorks } from "@/components/how-it-works";
+import { MerchantCta } from "@/components/merchant-cta";
+import {
+  hashForSection,
+  OfframpSectionTabs,
+  sectionFromHash,
+  type OfframpSection
+} from "@/components/offramp-section-tabs";
+import { TetherMark } from "@/components/tether-mark";
 import type { OfframpOrderFields } from "@/lib/offramp-route";
 import { ORDER_STATES, type OrderState } from "@/lib/state";
 
@@ -115,6 +125,8 @@ export default function OfframpPage() {
   /** Shown after POST_SWAP_SUCCESS_DELAY_MS once swap tx is available (see poll). */
   const [showPaymentSuccess, setShowPaymentSuccess] = useState(false);
 
+  const [section, setSection] = useState<OfframpSection>("pay");
+
   const paymentSuccessDelayStartedRef = useRef(false);
   const paymentSuccessTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -171,6 +183,21 @@ export default function OfframpPage() {
       mounted = false;
       clearInterval(interval);
     };
+  }, []);
+
+  useEffect(() => {
+    const syncFromHash = () => {
+      setSection(sectionFromHash(window.location.hash));
+    };
+    syncFromHash();
+    window.addEventListener("hashchange", syncFromHash);
+    return () => window.removeEventListener("hashchange", syncFromHash);
+  }, []);
+
+  const goToSection = useCallback((next: OfframpSection) => {
+    setSection(next);
+    const h = hashForSection(next);
+    window.history.replaceState(null, "", h ? `/offramp#${h}` : "/offramp");
   }, []);
 
   useEffect(() => {
@@ -325,17 +352,28 @@ export default function OfframpPage() {
   }, [btcIdr, idrNum, satsNum, primaryCurrency]);
 
   return (
-    <main className="app-shell">
-      <h1 className="mb-2 text-2xl font-black text-gold">Offramp</h1>
-      <p className="mb-6 text-sm text-zinc-300">
-        Enter an amount in IDR or sats. Payment always happens in sats (Lightning invoice), then agents run LN → USDT
-        (Arbitrum) → USDC (Base) → IDR payout.
-      </p>
+    <main className="mx-auto w-full max-w-lg px-4 pb-16 pt-2">
+      <div className="mb-6">
+        <h1 className="text-2xl font-black leading-tight text-white">Lightning in. Rupiah out.</h1>
+        <p className="mt-3 text-sm leading-relaxed text-zinc-400">
+          Settle BTC over Lightning into IDR. Pay the LN invoice; we route liquidity via stablecoins to BCA or GoPay.
+        </p>
+        <div className="mt-3 flex items-start gap-2.5 text-xs leading-relaxed text-zinc-500">
+          <TetherMark size={24} className="mt-0.5" />
+          <p>
+            <span className="font-semibold text-zinc-400">Powered by Tether.</span> Merchant-side settlement uses Tether
+            WDK with USDT on-chain; agent routing runs Boltz (LN→USDT), LiFi (USDT→USDC), then local IDR rails.
+          </p>
+        </div>
+      </div>
 
+      <OfframpSectionTabs value={section} onChange={goToSection} className="mb-6" />
+
+      {section === "pay" ? (
       <div className="space-y-4">
         <div className="rounded-2xl border border-border bg-card p-4">
           <div className="flex items-center justify-between">
-            <p className="text-xs uppercase tracking-wide text-zinc-400">Amount</p>
+            <p className="text-xs uppercase tracking-wide text-zinc-400">Amount to settle</p>
             <div className="flex items-center gap-2">
               <button
                 type="button"
@@ -421,7 +459,7 @@ export default function OfframpPage() {
                 </svg>
               </span>
               <div className="leading-tight">
-                <p className="text-sm font-semibold text-zinc-300">Your Transaction Limit:</p>
+                <p className="text-sm font-semibold text-zinc-300">Per-order limit</p>
                 <p className="text-sm font-black text-zinc-100">
                   <span className="text-gold">100</span> USDC
                 </p>
@@ -447,12 +485,12 @@ export default function OfframpPage() {
               </p>
             ) : null}
             {quoteError ? <p className="mt-1 text-red-400">{quoteError}</p> : null}
-            <p className="mt-1">When entering IDR, sats are rounded up (ceil).</p>
+            <p className="mt-1">IDR amounts round up to the next sat so the invoice always covers the IDR you entered.</p>
           </div>
         </div>
 
         <div className="rounded-2xl border border-border bg-card p-4">
-          <p className="mb-3 text-xs uppercase tracking-wide text-zinc-400">Payout destination</p>
+          <p className="mb-3 text-xs uppercase tracking-wide text-zinc-400">Where to send IDR</p>
 
           <div className="grid grid-cols-2 gap-2">
             <button
@@ -503,7 +541,7 @@ export default function OfframpPage() {
             </p>
           ) : null}
           <p className="mt-2 text-xs text-zinc-500">
-            Scan QRIS if you want to route a merchant payment flow; offramp payout destination is still BCA/GoPay details.
+            Need to read a merchant QRIS first? Use Scan — your payout details here are still BCA or GoPay.
           </p>
         </div>
 
@@ -512,6 +550,21 @@ export default function OfframpPage() {
         </Button>
         {error ? <p className="text-sm text-red-400">{error}</p> : null}
       </div>
+      ) : null}
+
+      {section === "how" ? <HowItWorks className="mt-0" /> : null}
+      {section === "gifts" ? <GiftCardsSection className="mt-0" /> : null}
+      {section === "merchant" ? <MerchantCta className="mt-0 scroll-mt-24" /> : null}
+
+      {section === "pay" ? (
+      <footer className="mt-12 border-t border-border pt-6 text-center text-xs leading-relaxed text-zinc-600">
+        Paysats — Lightning settlement for Indonesia
+        <div className="mt-3 flex flex-wrap items-center justify-center gap-x-2 gap-y-1 text-zinc-500">
+          <TetherMark size={18} />
+          <span>Powered by Tether · WDK · Boltz · LiFi</span>
+        </div>
+      </footer>
+      ) : null}
 
       {invoiceOpen && bolt11 ? (
         <div
@@ -521,7 +574,7 @@ export default function OfframpPage() {
         >
           <div className="w-full max-w-md space-y-4 rounded-2xl border border-border bg-zinc-950 p-4 shadow-2xl">
             <div className="flex items-center justify-between">
-              <p className="text-sm font-bold text-zinc-200">Pay invoice</p>
+              <p className="text-sm font-bold text-zinc-200">Pay with Lightning</p>
               <button
                 type="button"
                 onClick={() => setInvoiceOpen(false)}
@@ -613,13 +666,13 @@ export default function OfframpPage() {
                     />
                   </div>
                   <div className="space-y-2">
-                    <p className="text-base font-black text-zinc-100">Running agents and merchants</p>
+                    <p className="text-base font-black text-zinc-100">Settling your payout</p>
                     <p className="text-sm leading-relaxed text-zinc-400">
-                      Resolving your payout — hang tight. This usually takes{" "}
-                      <span className="font-semibold text-zinc-300">1–2 minutes</span>.
+                      Your Lightning payment is in. Routing to IDR usually takes{" "}
+                      <span className="font-semibold text-zinc-300">about one to two minutes</span>.
                     </p>
                     <p className="text-xs text-zinc-500">
-                      Lightning payment is confirmed. The agent pipeline is moving funds (Boltz, LiFi, payout) in the
+                      Funds move through automated swaps and payout partners (Boltz, LiFi, and your chosen rail) in the
                       background.
                       {isSwapSuccessMilestone(orderDetail)
                         ? ` USDC swap is in — success screen in ~${Math.ceil(POST_SWAP_SUCCESS_DELAY_MS / 1000)}s…`
@@ -705,8 +758,8 @@ export default function OfframpPage() {
                     </Button>
                   ) : null}
                   <p className="text-center text-xs text-zinc-500">
-                    Once the invoice is fulfilled, agents automatically start LN → USDT (Arbitrum) → USDC (Base) → IDR
-                    payout.
+                    After the invoice is paid, settlement runs automatically: Lightning → stablecoins → IDR to your
+                    account.
                   </p>
                   {!paymentProofHref ? (
                     <p className="text-center text-[11px] text-zinc-500">
