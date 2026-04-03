@@ -1,9 +1,10 @@
 "use client";
 
-export type OfframpSection = "pay" | "how" | "gifts" | "merchant";
+export type OfframpSection = "pay" | "how" | "gifts" | "merchant" | "liquidity";
 
 const TABS: { id: OfframpSection; label: string }[] = [
   { id: "pay", label: "Settle" },
+  { id: "liquidity", label: "Liquidity" },
   { id: "how", label: "How it works" },
   { id: "gifts", label: "Gift cards" },
   { id: "merchant", label: "Merchants" }
@@ -15,11 +16,13 @@ export function sectionFromHash(hash: string): OfframpSection {
   if (h === "merchant") return "merchant";
   if (h === "gift-cards" || h === "gifts") return "gifts";
   if (h === "how-it-works" || h === "how") return "how";
+  if (h === "liquidity" || h === "dashboard" || h === "idrx-pools") return "liquidity";
   return "pay";
 }
 
 export function hashForSection(s: OfframpSection): string {
   if (s === "pay") return "";
+  if (s === "liquidity") return "liquidity";
   if (s === "how") return "how-it-works";
   if (s === "gifts") return "gift-cards";
   return "merchant";

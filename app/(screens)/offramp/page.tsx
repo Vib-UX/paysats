@@ -14,6 +14,7 @@ import {
   sectionFromHash,
   type OfframpSection,
 } from "@/components/offramp-section-tabs";
+import { IdrxLiquiditySection } from "@/components/idrx-liquidity-section";
 import { IdrxMark } from "@/components/idrx-mark";
 import { TetherMark } from "@/components/tether-mark";
 import { backendFetch } from "@/lib/backend-fetch";
@@ -706,13 +707,14 @@ export default function OfframpPage() {
         </div>
       ) : null}
 
+      {section === "liquidity" ? <IdrxLiquiditySection className="mt-0" /> : null}
       {section === "how" ? <HowItWorks className="mt-0" /> : null}
       {section === "gifts" ? <GiftCardsSection className="mt-0" /> : null}
       {section === "merchant" ? (
         <MerchantCta className="mt-0 scroll-mt-24" />
       ) : null}
 
-      {section === "pay" ? (
+      {section === "pay" || section === "liquidity" ? (
         <footer className="mt-12 border-t border-border pt-6 text-center text-xs leading-relaxed text-zinc-600">
           Paysats — Lightning settlement for Indonesia
           <div className="mt-3 flex flex-wrap items-center justify-center gap-x-2 gap-y-1 text-zinc-500">
