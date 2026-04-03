@@ -19,7 +19,7 @@ const STEPS = [
   {
     step: "4",
     title: "IDR hits your account",
-    body: "Payout lands to the BCA account or GoPay number you provided. Track progress on the order status screen."
+    body: "BCA: the live route shows IDRX liquidating to IDR into the account you entered. GoPay: payout lands on the number you provided. Track progress on the order status screen."
   }
 ] as const;
 

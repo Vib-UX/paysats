@@ -14,6 +14,7 @@ import {
   sectionFromHash,
   type OfframpSection,
 } from "@/components/offramp-section-tabs";
+import { IdrxMark } from "@/components/idrx-mark";
 import { TetherMark } from "@/components/tether-mark";
 import { backendFetch } from "@/lib/backend-fetch";
 import type { OfframpOrderFields } from "@/lib/offramp-route";
@@ -400,7 +401,15 @@ export default function OfframpPage() {
         </h1>
         <p className="mt-3 text-sm leading-relaxed text-zinc-400">
           Settle BTC over Lightning into IDR. Pay the LN invoice; we route
-          liquidity via stablecoins to BCA or GoPay.
+          liquidity via stablecoins to BCA or GoPay.{" "}
+          <span className="text-zinc-300">
+            We are the first platform to leverage{" "}
+            <span className="mx-0.5 inline-flex items-center gap-1 align-middle">
+              <IdrxMark size={22} alt="" />
+              <span className="font-semibold text-zinc-200">IDRX</span>
+            </span>{" "}
+            to liquidate to IDR for your BCA account.
+          </span>
         </p>
         <div className="mt-3 flex items-start gap-2.5 text-xs leading-relaxed text-zinc-500">
           <TetherMark size={24} className="mt-0.5" />
@@ -410,7 +419,15 @@ export default function OfframpPage() {
             </span>{" "}
             Merchant-side settlement uses Tether WDK with USDT on-chain; agent
             routing runs Boltz (LN→USDT), LiFi (USDT→USDC), then local IDR
-            rails.
+            rails.{" "}
+            <span className="inline-flex flex-wrap items-center gap-x-1.5 gap-y-0.5 align-middle">
+              For BCA bank payouts, your order route shows{" "}
+              <span className="inline-flex items-center gap-1">
+                <IdrxMark size={16} alt="" className="translate-y-px" />
+                <span className="font-semibold text-zinc-400">IDRX</span>
+              </span>{" "}
+              → IDR.
+            </span>
           </p>
         </div>
       </div>
@@ -623,6 +640,17 @@ export default function OfframpPage() {
                 GoPay
               </button>
             </div>
+
+            {payoutMethod === "bank_transfer" ? (
+              <div className="mt-3 flex items-start gap-2.5 text-xs leading-relaxed text-zinc-500">
+                <IdrxMark size={20} alt="" className="mt-0.5 shrink-0" />
+                <p>
+                  <span className="font-semibold text-zinc-400">IDRX</span> —
+                  BCA bank accounts settle with liquidation to IDR — follow the
+                  route steps after you pay.
+                </p>
+              </div>
+            ) : null}
 
             <label className="mt-4 block text-sm font-semibold text-zinc-300">
               {payoutMethod === "gopay"
@@ -838,6 +866,9 @@ export default function OfframpPage() {
                     <p className="text-xs text-zinc-500">
                       Funds move through automated swaps and payout partners
                       (Boltz, LiFi, and your chosen rail) in the background.
+                      {orderDetail?.p2pmPayoutMethod === "bank_transfer"
+                        ? " For BCA, the route reflects IDRX → IDR on your bank payout."
+                        : null}
                       {isSwapSuccessMilestone(orderDetail)
                         ? ` USDC swap is in — success screen in ~${Math.ceil(POST_SWAP_SUCCESS_DELAY_MS / 1000)}s…`
                         : null}

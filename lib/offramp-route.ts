@@ -109,6 +109,9 @@ function payoutLabel(method: string | null | undefined): string {
 export function buildOfframpRouteHops(order: OfframpOrderFields | null | undefined): RouteHop[] {
   if (!order) return [];
 
+  const bankBca =
+    String(order.p2pmPayoutMethod || "").toLowerCase() === "bank_transfer";
+
   const stateStr = String(order.state || "ROUTE_SHOWN");
   const si = effectiveStateIndex(order, stateStr);
   const routeShown = idx("ROUTE_SHOWN");
@@ -253,16 +256,26 @@ export function buildOfframpRouteHops(order: OfframpOrderFields | null | undefin
     });
   }
 
+  const p2pTitle = bankBca
+    ? "p2p.me merchant (USDC → IDR via IDRX)"
+    : "p2p.me merchant (USDC → IDR)";
+  const p2pDescDone = bankBca
+    ? "USDC is in place after the LiFi swap (see link above). For BCA, IDRX liquidates to IDR; merchant flow continues from here."
+    : "USDC is in place after the LiFi swap (see link above). Merchant / IDR flow is wired from here.";
+  const p2pDescPending = bankBca
+    ? "Starts after USDC is available; BCA payouts are described as IDRX → IDR in this route."
+    : "Starts after USDC is available for the offramp.";
+
   hops.push({
     id: "p2p",
-    title: "p2p.me merchant (USDC → IDR)",
+    title: p2pTitle,
     description: tailMilestonesDone
-      ? "USDC is in place after the LiFi swap (see link above). Merchant / IDR flow is wired from here."
+      ? p2pDescDone
       : tailMilestonesActive
         ? "Waiting for the USDT→USDC swap transaction link…"
         : failed && order.p2pmOrderId
           ? "p2p.me step did not finish; check the app or support with your order ref."
-          : "Starts after USDC is available for the offramp.",
+          : p2pDescPending,
     status: hopStatus(tailMilestonesDone, tailMilestonesActive),
     links: p2pLinks
   });
@@ -271,19 +284,29 @@ export function buildOfframpRouteHops(order: OfframpOrderFields | null | undefin
   const mask = maskPayoutRecipient(order.p2pmPayoutMethod, order.payoutRecipient);
   const pl = payoutLabel(order.p2pmPayoutMethod);
   const idrN = order.idrAmount != null ? `Rp ${Number(order.idrAmount).toLocaleString("id-ID")}` : "IDR";
+  const fiatTitle = bankBca ? `IDR settled · ${pl} (IDRX → IDR)` : `IDR settled · ${pl}`;
+  const fiatDescDoneCompleted = bankBca
+    ? `Final payout complete. ${idrN} to ${pl} ${mask} via IDRX liquidation to IDR.`
+    : `Final payout complete. ${idrN} to ${pl} ${mask}.`;
+  const fiatDescDoneInProgress = bankBca
+    ? `Payout path to ${pl} ${mask} — IDRX → IDR after USDC from the swap (LiFi link above).`
+    : `Payout path to ${pl} ${mask} — proceeds after USDC from the swap (LiFi link above).`;
+  const fiatDescDest = bankBca
+    ? `Destination: ${pl} ${mask}; route shows IDRX liquidating to IDR.`
+    : `Destination: ${pl} ${mask}.`;
 
   hops.push({
     id: "fiat-settled",
-    title: `IDR settled · ${pl}`,
+    title: fiatTitle,
     description: tailMilestonesDone
       ? stateStr === "COMPLETED"
-        ? `Final payout complete. ${idrN} to ${pl} ${mask}.`
-        : `Payout path to ${pl} ${mask} — proceeds after USDC from the swap (LiFi link above).`
+        ? fiatDescDoneCompleted
+        : fiatDescDoneInProgress
       : tailMilestonesActive
         ? `Waiting for swap confirmation and explorer link before marking ${pl} ${mask} ready.`
         : failed
           ? `Payout to ${pl} ${mask} was not completed. Check status or support.`
-          : `Destination: ${pl} ${mask}.`,
+          : fiatDescDest,
     status: hopStatus(tailMilestonesDone, tailMilestonesActive),
     links: []
   });
