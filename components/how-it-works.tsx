@@ -14,7 +14,7 @@ const STEPS = [
   {
     step: "3",
     title: "We route the rails",
-    body: "Liquidity moves LN → USDT (Boltz) → USDC (LiFi via WDK) → IDR partners so funds reach your account."
+    body: "Liquidity moves LN → USDT (Boltz) → Base: USDC + p2p.me for GoPay, or IDRX via LiFi for BCA bank — then IDRX burn/redeem to IDR."
   },
   {
     step: "4",

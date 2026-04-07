@@ -11,9 +11,11 @@ import { log } from "./logger.js";
 import { createInvoice, initNwc, payInvoice, payInvoiceWithRetries } from "./nwc.js";
 import { prisma } from "./prisma.js";
 import { OrderState, requireTransition } from "./state.js";
-import { executeUsdtToUsdcSwap } from "./swap.js";
+import { executeUsdtToIdrxOnBase, executeUsdtToUsdcSwap } from "./swap.js";
 import { createP2pmSellOrder } from "./p2pm.js";
-import { fetchLifiQuote } from "./lifiQuote.js";
+import { fetchLifiQuote, LIFI_IDRX_BASE, LIFI_USDC_BASE } from "./lifiQuote.js";
+import { idrxBaseRecipientAddress } from "./idrxConfig.js";
+import { runBankIdrxBurnOnly, runBankIdrxRedeemOnly } from "./idrxOfframp.js";
 import { waitForArbitrumUsdtBalance } from "./arbUsdtConfirm.js";
 
 const app = express();
@@ -47,6 +49,10 @@ type MemoryOrder = {
   boltzTxHash?: string | null;
   swapTxHash?: string | null;
   p2pmOrderId?: string | null;
+  bankAccountName?: string | null;
+  idrxBurnTxHash?: string | null;
+  idrxRedeemId?: string | null;
+  idrxAmountIdr?: number | null;
   merchantName?: string | null;
   qrisPayload?: string | null;
 };
@@ -227,6 +233,12 @@ function normalizePayoutMethod(method: unknown): "gopay" | "bank_transfer" {
   throw new Error("Invalid payoutMethod (expected gopay or bank_transfer)");
 }
 
+function normalizeBankAccountName(raw: unknown): string {
+  const s = String(raw || "").trim();
+  if (s) return s;
+  return process.env.IDRX_DEFAULT_BANK_ACCOUNT_NAME?.trim() || "Paysats user";
+}
+
 function normalizeRecipientDetails(payoutMethod: "gopay" | "bank_transfer", raw: unknown): string {
   const s = String(raw || "").trim();
   if (!s) throw new Error("recipientDetails is required");
@@ -265,6 +277,7 @@ async function watchInvoiceAndRunOfframpPipeline(params: {
   satAmount: number;
   payoutMethod: "gopay" | "bank_transfer";
   recipientDetails: string;
+  bankAccountName: string;
 }): Promise<void> {
   if (offrampWatchers.has(params.orderId)) {
     log.warn("pipeline", "watcher already running; skip duplicate", { orderId: params.orderId });
@@ -548,113 +561,274 @@ async function watchInvoiceAndRunOfframpPipeline(params: {
     }
     await advanceOrderState(params.orderId, "USDT_RECEIVED");
 
-    // Swap USDT(Arb) -> USDC(Base) (placeholder implementation).
-    const usdcRecipientBase = "0x47D02EE816f6D66E39333F3a06dB14294F773378";
-    log.info("pipeline", "USDT on Arbitrum received at agent Safe — next: USDT→USDC (Base)", {
-      orderId: params.orderId,
-      safePrefix: `${receiveAddress.slice(0, 10)}…${receiveAddress.slice(-6)}`,
-      usdcBaseRecipient: usdcRecipientBase
-    });
-    if (process.env.LIFI_API_KEY?.trim()) {
-      // Fetch a LiFi quote primarily to verify we are targeting the correct Base recipient.
-      // Execution is handled elsewhere (WDK userOp script); this is a safety check / audit trail.
-      try {
-        const fromAmountMinUnits = String(Math.max(1, Math.floor(Number(boltz.usdtAmount || 0) * 1e6)));
-        log.info("pipeline", "LiFi quote request (Arb USDT → Base USDC)", {
-          orderId: params.orderId,
-          fromAddress: `${receiveAddress.slice(0, 10)}…${receiveAddress.slice(-6)}`,
-          toAddress: usdcRecipientBase,
-          fromAmountMinUnits
-        });
-        const quote = await fetchLifiQuote({
-          apiKey: String(process.env.LIFI_API_KEY),
-          fromAddress: receiveAddress,
-          toAddress: usdcRecipientBase,
-          fromAmount: fromAmountMinUnits,
-          slippage: process.env.LIFI_SLIPPAGE?.trim() || "0.03"
-        });
-        log.info("lifi", "quote fetched for offramp", {
-          orderId: params.orderId,
-          toAddress: usdcRecipientBase,
-          tool: quote.toolDetails?.name || quote.tool || "(unknown)",
-          toAmountMin: quote.estimate?.toAmountMin,
-          toAmount: quote.estimate?.toAmount
-        });
-      } catch (e) {
-        log.warn("lifi", "quote fetch failed (continuing with placeholder swap)", {
-          orderId: params.orderId,
-          error: e instanceof Error ? e.message : String(e)
-        });
-      }
-    } else {
-      log.info("pipeline", "LIFI_API_KEY not set — skipping LiFi quote log step", { orderId: params.orderId });
-    }
+    const fromAmountMinUnits = String(
+      Math.max(1, Math.floor(Number(boltz.usdtAmount || 0) * 1e6)),
+    );
+    const pauseAfterLifi =
+      process.env.PAUSE_AFTER_LIFI === "1" || process.env.PAUSE_P2P_FLOW === "1";
 
-    log.info("pipeline", "executeUsdtToUsdcSwap (WDK+LiFi)", {
-      orderId: params.orderId,
-      usdtAmount: Number(boltz.usdtAmount || 0) || 0
-    });
-    const swap = await executeUsdtToUsdcSwap({
-      usdtAmount: Number(boltz.usdtAmount || 0) || 0,
-      walletAddress: receiveAddress
-    });
-    log.info("pipeline", "USDC swap step finished", {
-      orderId: params.orderId,
-      usdcAmount: swap.usdcAmount,
-      swapTxHash: swap.txHash
-    });
-    {
-      const mem = memoryOrders.get(params.orderId);
-      if (mem) {
-        memoryOrders.set(params.orderId, { ...mem, usdcAmount: swap.usdcAmount, swapTxHash: swap.txHash, updatedAt: nowIso() });
-      } else {
-        await prisma.order
-          .update({ where: { id: params.orderId }, data: { usdcAmount: swap.usdcAmount, swapTxHash: swap.txHash } })
-          .catch(() => {});
-      }
-    }
-    await advanceOrderState(params.orderId, "USDC_SWAPPED");
-
-    // Optional safety pause: stop after swap, do not proceed to P2P.me offramp.
-    if (process.env.PAUSE_P2P_FLOW === "1") {
-      log.warn("pipeline", "PAUSE_P2P_FLOW=1 — stopping after USDC swap (no P2P.me)", {
+    if (params.payoutMethod === "bank_transfer") {
+      const idrxRecipient = idrxBaseRecipientAddress();
+      log.info("pipeline", "USDT on Arbitrum — next: LiFi USDT → IDRX (Base)", {
         orderId: params.orderId,
-        usdcAmount: swap.usdcAmount
+        safePrefix: `${receiveAddress.slice(0, 10)}…${receiveAddress.slice(-6)}`,
+        idrxBaseRecipient: `${idrxRecipient.slice(0, 10)}…${idrxRecipient.slice(-6)}`,
       });
-      return;
-    }
-
-    log.info("pipeline", "starting P2P.me IDR offramp", { orderId: params.orderId });
-    // Offramp to IDR via P2P.me automation.
-    const p2pm = await createP2pmSellOrder({
-      usdcAmount: swap.usdcAmount,
-      payoutMethod: params.payoutMethod,
-      recipientDetails: params.recipientDetails
-    });
-    log.info("pipeline", "P2P.me sell order submitted", {
-      orderId: params.orderId,
-      p2pmOrderId: p2pm.orderId,
-      status: p2pm.status
-    });
-    {
-      const mem = memoryOrders.get(params.orderId);
-      if (mem) {
-        memoryOrders.set(params.orderId, { ...mem, p2pmOrderId: p2pm.orderId, p2pmPayoutMethod: params.payoutMethod, updatedAt: nowIso() });
-      } else {
-        await prisma.order
-          .update({
-            where: { id: params.orderId },
-            data: { p2pmOrderId: p2pm.orderId, p2pmPayoutMethod: params.payoutMethod }
-          })
-          .catch(() => {});
+      if (process.env.LIFI_API_KEY?.trim()) {
+        try {
+          log.info("pipeline", "LiFi quote request (Arb USDT → Base IDRX)", {
+            orderId: params.orderId,
+            fromAmountMinUnits,
+          });
+          const quote = await fetchLifiQuote({
+            apiKey: String(process.env.LIFI_API_KEY),
+            fromAddress: receiveAddress,
+            toAddress: idrxRecipient,
+            fromAmount: fromAmountMinUnits,
+            toToken: LIFI_IDRX_BASE,
+            slippage: process.env.LIFI_SLIPPAGE?.trim() || "0.03",
+          });
+          log.info("lifi", "quote fetched (IDRX path)", {
+            orderId: params.orderId,
+            tool: quote.toolDetails?.name || quote.tool || "(unknown)",
+            toAmountMin: quote.estimate?.toAmountMin,
+            toAmount: quote.estimate?.toAmount,
+          });
+        } catch (e) {
+          log.warn("lifi", "IDRX quote fetch failed (continuing to swap attempt)", {
+            orderId: params.orderId,
+            error: e instanceof Error ? e.message : String(e),
+          });
+        }
       }
-    }
-    await advanceOrderState(params.orderId, "P2PM_ORDER_PLACED");
 
-    // For now we don't have robust confirmation/settlement polling.
-    await advanceOrderState(params.orderId, "IDR_SETTLED");
-    await advanceOrderState(params.orderId, "COMPLETED");
-    log.info("pipeline", "offramp pipeline completed", { orderId: params.orderId });
+      log.info("pipeline", "executeUsdtToIdrxOnBase (WDK+LiFi)", {
+        orderId: params.orderId,
+        usdtAmount: Number(boltz.usdtAmount || 0) || 0,
+      });
+      const idrxSwap = await executeUsdtToIdrxOnBase({
+        usdtAmount: Number(boltz.usdtAmount || 0) || 0,
+        walletAddress: receiveAddress,
+      });
+      log.info("pipeline", "LiFi IDRX swap finished", {
+        orderId: params.orderId,
+        idrxAmountIdr: idrxSwap.idrxAmountIdr,
+        swapTxHash: idrxSwap.txHash,
+      });
+      {
+        const mem = memoryOrders.get(params.orderId);
+        const patch = {
+          idrxAmountIdr: idrxSwap.idrxAmountIdr,
+          swapTxHash: idrxSwap.txHash,
+          updatedAt: nowIso(),
+        };
+        if (mem) {
+          memoryOrders.set(params.orderId, { ...mem, ...patch });
+        } else {
+          await prisma.order
+            .update({
+              where: { id: params.orderId },
+              data: {
+                idrxAmountIdr: idrxSwap.idrxAmountIdr,
+                swapTxHash: idrxSwap.txHash,
+              },
+            })
+            .catch(() => {});
+        }
+      }
+      await advanceOrderState(params.orderId, "USDC_SWAPPED");
+
+      if (pauseAfterLifi) {
+        log.warn("pipeline", "PAUSE_AFTER_LIFI / PAUSE_P2P_FLOW — stopping after LiFi (no IDRX burn)", {
+          orderId: params.orderId,
+          idrxAmountIdr: idrxSwap.idrxAmountIdr,
+        });
+        return;
+      }
+
+      if (!process.env.IDRX_BURN_PRIVATE_KEY?.trim()) {
+        throw new Error("IDRX_BURN_PRIVATE_KEY is not set (required for bank IDRX burn on Base).");
+      }
+      if (!process.env.IDRX_API_KEY?.trim() || !process.env.IDRX_API_SECRET?.trim()) {
+        throw new Error("IDRX_API_KEY / IDRX_API_SECRET not set (required for redeem-request).");
+      }
+
+      const burnOut = await runBankIdrxBurnOnly({
+        orderId: params.orderId,
+        recipientDigits: params.recipientDetails,
+        idrxAmountMinRaw: idrxSwap.idrxAmountMinRaw,
+      });
+      {
+        const mem = memoryOrders.get(params.orderId);
+        const patch = {
+          idrxBurnTxHash: burnOut.burnTxHash,
+          updatedAt: nowIso(),
+        };
+        if (mem) {
+          memoryOrders.set(params.orderId, { ...mem, ...patch });
+        } else {
+          await prisma.order
+            .update({
+              where: { id: params.orderId },
+              data: { idrxBurnTxHash: burnOut.burnTxHash },
+            })
+            .catch(() => {});
+        }
+      }
+      await advanceOrderState(params.orderId, "P2PM_ORDER_PLACED");
+
+      const redeemId = await runBankIdrxRedeemOnly({
+        orderId: params.orderId,
+        burnTxHash: burnOut.burnTxHash,
+        amountTransfer: burnOut.amountTransfer,
+        recipientDigits: params.recipientDetails,
+        bankAccountName: params.bankAccountName,
+        holderAddress: burnOut.holderAddress,
+      });
+      {
+        const mem = memoryOrders.get(params.orderId);
+        const patch = {
+          idrxRedeemId: redeemId,
+          p2pmOrderId: redeemId,
+          updatedAt: nowIso(),
+        };
+        if (mem) {
+          memoryOrders.set(params.orderId, { ...mem, ...patch });
+        } else {
+          await prisma.order
+            .update({
+              where: { id: params.orderId },
+              data: { idrxRedeemId: redeemId, p2pmOrderId: redeemId },
+            })
+            .catch(() => {});
+        }
+      }
+      await advanceOrderState(params.orderId, "P2PM_ORDER_CONFIRMED");
+      await advanceOrderState(params.orderId, "IDR_SETTLED");
+      await advanceOrderState(params.orderId, "COMPLETED");
+      log.info("pipeline", "offramp pipeline completed (IDRX bank path)", {
+        orderId: params.orderId,
+      });
+    } else {
+      const usdcRecipientBase =
+        process.env.LIFI_TO_ADDRESS?.trim() || "0x47D02EE816f6D66E39333F3a06dB14294F773378";
+      log.info("pipeline", "USDT on Arbitrum — next: USDT→USDC (Base) for GoPay / p2p.me", {
+        orderId: params.orderId,
+        safePrefix: `${receiveAddress.slice(0, 10)}…${receiveAddress.slice(-6)}`,
+        usdcBaseRecipient: usdcRecipientBase,
+      });
+      if (process.env.LIFI_API_KEY?.trim()) {
+        try {
+          log.info("pipeline", "LiFi quote request (Arb USDT → Base USDC)", {
+            orderId: params.orderId,
+            fromAmountMinUnits,
+          });
+          const quote = await fetchLifiQuote({
+            apiKey: String(process.env.LIFI_API_KEY),
+            fromAddress: receiveAddress,
+            toAddress: usdcRecipientBase,
+            fromAmount: fromAmountMinUnits,
+            toToken: LIFI_USDC_BASE,
+            slippage: process.env.LIFI_SLIPPAGE?.trim() || "0.03",
+          });
+          log.info("lifi", "quote fetched for offramp (USDC)", {
+            orderId: params.orderId,
+            toAddress: usdcRecipientBase,
+            tool: quote.toolDetails?.name || quote.tool || "(unknown)",
+            toAmountMin: quote.estimate?.toAmountMin,
+            toAmount: quote.estimate?.toAmount,
+          });
+        } catch (e) {
+          log.warn("lifi", "quote fetch failed (continuing with swap)", {
+            orderId: params.orderId,
+            error: e instanceof Error ? e.message : String(e),
+          });
+        }
+      } else {
+        log.info("pipeline", "LIFI_API_KEY not set — skipping LiFi quote log step", {
+          orderId: params.orderId,
+        });
+      }
+
+      log.info("pipeline", "executeUsdtToUsdcSwap (WDK+LiFi)", {
+        orderId: params.orderId,
+        usdtAmount: Number(boltz.usdtAmount || 0) || 0,
+      });
+      const swap = await executeUsdtToUsdcSwap({
+        usdtAmount: Number(boltz.usdtAmount || 0) || 0,
+        walletAddress: receiveAddress,
+        toAddress: usdcRecipientBase,
+      });
+      log.info("pipeline", "USDC swap step finished", {
+        orderId: params.orderId,
+        usdcAmount: swap.usdcAmount,
+        swapTxHash: swap.txHash,
+      });
+      {
+        const mem = memoryOrders.get(params.orderId);
+        if (mem) {
+          memoryOrders.set(params.orderId, {
+            ...mem,
+            usdcAmount: swap.usdcAmount,
+            swapTxHash: swap.txHash,
+            updatedAt: nowIso(),
+          });
+        } else {
+          await prisma.order
+            .update({
+              where: { id: params.orderId },
+              data: { usdcAmount: swap.usdcAmount, swapTxHash: swap.txHash },
+            })
+            .catch(() => {});
+        }
+      }
+      await advanceOrderState(params.orderId, "USDC_SWAPPED");
+
+      if (pauseAfterLifi) {
+        log.warn("pipeline", "PAUSE_AFTER_LIFI — stopping after USDC swap (no p2p.me)", {
+          orderId: params.orderId,
+          usdcAmount: swap.usdcAmount,
+        });
+        return;
+      }
+
+      log.info("pipeline", "starting P2P.me IDR offramp", { orderId: params.orderId });
+      const p2pm = await createP2pmSellOrder({
+        usdcAmount: swap.usdcAmount,
+        payoutMethod: params.payoutMethod,
+        recipientDetails: params.recipientDetails,
+      });
+      log.info("pipeline", "P2P.me sell order submitted", {
+        orderId: params.orderId,
+        p2pmOrderId: p2pm.orderId,
+        status: p2pm.status,
+      });
+      {
+        const mem = memoryOrders.get(params.orderId);
+        if (mem) {
+          memoryOrders.set(params.orderId, {
+            ...mem,
+            p2pmOrderId: p2pm.orderId,
+            p2pmPayoutMethod: params.payoutMethod,
+            updatedAt: nowIso(),
+          });
+        } else {
+          await prisma.order
+            .update({
+              where: { id: params.orderId },
+              data: { p2pmOrderId: p2pm.orderId, p2pmPayoutMethod: params.payoutMethod },
+            })
+            .catch(() => {});
+        }
+      }
+      await advanceOrderState(params.orderId, "P2PM_ORDER_PLACED");
+      await advanceOrderState(params.orderId, "P2PM_ORDER_CONFIRMED");
+      await advanceOrderState(params.orderId, "IDR_SETTLED");
+      await advanceOrderState(params.orderId, "COMPLETED");
+      log.info("pipeline", "offramp pipeline completed (GoPay / p2p.me)", {
+        orderId: params.orderId,
+      });
+    }
   } catch (error) {
     log.error("pipeline", "offramp pipeline failed", error, { orderId: params.orderId });
     try {
@@ -731,6 +905,7 @@ app.post("/api/offramp/create", async (req, res) => {
 
     const payoutMethod = normalizePayoutMethod(req.body.payoutMethod);
     const recipientDetails = normalizeRecipientDetails(payoutMethod, req.body.recipientDetails);
+    const bankAccountName = normalizeBankAccountName(req.body.bankAccountName);
 
     const { btcIdr, fetchedAt } = await fetchBtcIdrQuoteCached();
     const requestedSats = Number(req.body.satAmount || 0);
@@ -786,6 +961,7 @@ app.post("/api/offramp/create", async (req, res) => {
           btcIdrFetchedAt: new Date(fetchedAt),
           p2pmPayoutMethod: payoutMethod,
           payoutRecipient: recipientDetails,
+          bankAccountName,
           invoiceBolt11: invoice.bolt11,
           invoiceExpiresAt: invoice.expiresAt ? new Date(invoice.expiresAt * 1000) : null,
           merchantName: "Offramp"
@@ -805,6 +981,7 @@ app.post("/api/offramp/create", async (req, res) => {
         btcIdrFetchedAt: fetchedAt,
         p2pmPayoutMethod: payoutMethod,
         payoutRecipient: recipientDetails,
+        bankAccountName,
         invoiceBolt11: invoice.bolt11,
         invoiceExpiresAt: invoice.expiresAt ? new Date(invoice.expiresAt * 1000).toISOString() : null,
         createdAt,
@@ -837,7 +1014,8 @@ app.post("/api/offramp/create", async (req, res) => {
         bolt11: invoice.bolt11,
         satAmount,
         payoutMethod,
-        recipientDetails
+        recipientDetails,
+        bankAccountName,
       }).catch((e) => log.error("pipeline", "watcher crashed (unhandled)", e, { orderId }));
     } else if (!client) {
       log.warn("pipeline", "Not starting invoice watcher (stub invoice or no NWC client)", { orderId });
