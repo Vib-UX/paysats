@@ -934,19 +934,7 @@ app.post("/api/offramp/create", async (req, res) => {
 
     const payoutMethod = normalizePayoutMethod(req.body.payoutMethod);
     const recipientDetails = normalizeRecipientDetails(payoutMethod, req.body.recipientDetails);
-    let bankAccountName: string;
-    if (payoutMethod === "bank_transfer") {
-      const n = String(req.body.bankAccountName || "").trim();
-      if (n.length < 2) {
-        return res.status(400).json({
-          error:
-            "bankAccountName is required for BCA payouts (account holder name, at least 2 characters).",
-        });
-      }
-      bankAccountName = n;
-    } else {
-      bankAccountName = normalizeBankAccountName(req.body.bankAccountName);
-    }
+    const bankAccountName = normalizeBankAccountName(req.body.bankAccountName);
 
     const { btcIdr, fetchedAt } = await fetchBtcIdrQuoteCached();
     const requestedSats = Number(req.body.satAmount || 0);

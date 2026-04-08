@@ -71,4 +71,4 @@ Example explorer links from a successful run (hashes are illustrative; yours wil
 | IDRX burn on Base (bundle tx — use this hash for redeem `txHash`) | [Basescan tx `0xe0f59942…`](https://basescan.org/tx/0xe0f599423181d65e91d5464e344691505a8c8c27d2c7fe329052411eeb6bdd7b) |
 | Redeem API | `POST https://idrx.co/api/transaction/redeem-request` — response includes `data.id`, `custRefNumber`, etc. (see IDRX dashboard for status). |
 
-**Offramp UI (BCA):** users enter **IDR amount**, **BCA account number**, and **account holder name**. The pipeline uses that IDR target for burn/redeem (capped by on-chain IDRX balance after the bridge). Scripts: `npm run idrx:redeem:bca`, `npm run burn:idrx` (see `backend/.env.example`).
+**Offramp UI (BCA):** users enter **IDR amount** and **BCA account number**. Redeem `bankAccountName` uses the server default (`IDRX_DEFAULT_BANK_ACCOUNT_NAME` / `normalizeBankAccountName`) unless you pass it in the API. Burn/redeem IDR target follows order `idrAmount` (capped by on-chain IDRX). Scripts: `npm run idrx:redeem:bca`, `npm run burn:idrx` (see `backend/.env.example`).
