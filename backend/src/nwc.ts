@@ -1,3 +1,4 @@
+import "websocket-polyfill";
 import { NWCClient } from "@getalby/sdk";
 import { log } from "./logger.js";
 
