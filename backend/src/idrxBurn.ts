@@ -1,4 +1,4 @@
-import { Contract, JsonRpcProvider, Wallet } from "ethers";
+import { Contract, JsonRpcProvider } from "ethers";
 import { idrxBaseContractAddress, requireBaseRpcUrl } from "./idrxConfig.js";
 import { log } from "./logger.js";
 
@@ -34,6 +34,14 @@ export function rawToIdrxHuman(raw: bigint, decimals: number): number {
   return Number(raw) / 10 ** decimals;
 }
 
+/** Whole IDR (no fraction) → token smallest units on Base. */
+export function idrxHumanIdrToRaw(humanIdrWhole: bigint, decimals: number): bigint {
+  if (humanIdrWhole < 0n) {
+    throw new Error("idrxHumanIdrToRaw: human amount must be non-negative");
+  }
+  return humanIdrWhole * 10n ** BigInt(decimals);
+}
+
 export async function waitForIdrxBalance(params: {
   holderAddress: string;
   minRaw: bigint;
@@ -61,25 +69,3 @@ export async function waitForIdrxBalance(params: {
   );
 }
 
-export async function burnIdrxWithAccountNumber(params: {
-  privateKey: string;
-  amountRaw: bigint;
-  /** sha256 hex string passed to the contract (UTF-8 hash of bank binding string). */
-  hashedAccountNumberHex: string;
-}): Promise<{ txHash: string }> {
-  const provider = new JsonRpcProvider(requireBaseRpcUrl());
-  const wallet = new Wallet(params.privateKey, provider);
-  const c = new Contract(idrxBaseContractAddress(), IDRX_MIN_ABI, wallet);
-
-  log.info("idrx", "burnWithAccountNumber", {
-    from: `${wallet.address.slice(0, 10)}…`,
-    amountRaw: params.amountRaw.toString(),
-  });
-
-  const tx = await c.burnWithAccountNumber(params.amountRaw, params.hashedAccountNumberHex);
-  const receipt = await tx.wait();
-  const hash = receipt?.hash ?? tx.hash;
-  if (!hash) throw new Error("Burn transaction has no hash");
-  log.info("idrx", "burn confirmed", { txHash: hash });
-  return { txHash: hash };
-}

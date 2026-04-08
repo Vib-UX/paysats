@@ -6,6 +6,7 @@ import {
   deriveArbitrumErc4337ReceiveAddress,
   requireArbitrumReceiveAddress
 } from "./arbitrumErc4337Address.js";
+import { deriveBaseErc4337ReceiveAddress } from "./baseErc4337Address.js";
 import { createBoltzSwap, getBoltzSwapStatus } from "./boltz.js";
 import { log } from "./logger.js";
 import { createInvoice, initNwc, payInvoice, payInvoiceWithRetries } from "./nwc.js";
@@ -216,6 +217,21 @@ function logArbitrumAgentAddresses(orderId: string): void {
     });
   } catch (e) {
     log.warn("pipeline", "failed to derive Arbitrum agent address", {
+      orderId,
+      error: e instanceof Error ? e.message : String(e)
+    });
+  }
+  try {
+    const b = deriveBaseErc4337ReceiveAddress(seed);
+    log.info("pipeline", "Base agent (WDK ERC-4337)", {
+      orderId,
+      chainId: b.chainId,
+      ownerAddress: b.ownerAddress,
+      safeAddress: b.safeAddress,
+      note: "LiFi USDT→IDRX delivers here; burn userOps use same seed; Pimlico gas token default Base USDC."
+    });
+  } catch (e) {
+    log.warn("pipeline", "failed to derive Base agent address", {
       orderId,
       error: e instanceof Error ? e.message : String(e)
     });
@@ -646,17 +662,30 @@ async function watchInvoiceAndRunOfframpPipeline(params: {
         return;
       }
 
-      if (!process.env.IDRX_BURN_PRIVATE_KEY?.trim()) {
-        throw new Error("IDRX_BURN_PRIVATE_KEY is not set (required for bank IDRX burn on Base).");
+      if (!process.env.BASE_RPC_URL?.trim()) {
+        throw new Error("BASE_RPC_URL is not set (required for IDRX burn via WDK on Base).");
       }
       if (!process.env.IDRX_API_KEY?.trim() || !process.env.IDRX_API_SECRET?.trim()) {
         throw new Error("IDRX_API_KEY / IDRX_API_SECRET not set (required for redeem-request).");
       }
 
+      const orderForBurn =
+        memoryOrders.get(params.orderId) ??
+        (await prisma.order.findUnique({ where: { id: params.orderId } }).catch(() => null));
+      const idrFromOrder =
+        orderForBurn && (orderForBurn as { idrAmount?: unknown }).idrAmount != null
+          ? Number((orderForBurn as { idrAmount: number }).idrAmount)
+          : NaN;
+      const burnAmountIdr =
+        Number.isFinite(idrFromOrder) && idrFromOrder > 0
+          ? Math.floor(idrFromOrder)
+          : undefined;
+
       const burnOut = await runBankIdrxBurnOnly({
         orderId: params.orderId,
         recipientDigits: params.recipientDetails,
         idrxAmountMinRaw: idrxSwap.idrxAmountMinRaw,
+        burnAmountIdr,
       });
       {
         const mem = memoryOrders.get(params.orderId);
@@ -905,7 +934,19 @@ app.post("/api/offramp/create", async (req, res) => {
 
     const payoutMethod = normalizePayoutMethod(req.body.payoutMethod);
     const recipientDetails = normalizeRecipientDetails(payoutMethod, req.body.recipientDetails);
-    const bankAccountName = normalizeBankAccountName(req.body.bankAccountName);
+    let bankAccountName: string;
+    if (payoutMethod === "bank_transfer") {
+      const n = String(req.body.bankAccountName || "").trim();
+      if (n.length < 2) {
+        return res.status(400).json({
+          error:
+            "bankAccountName is required for BCA payouts (account holder name, at least 2 characters).",
+        });
+      }
+      bankAccountName = n;
+    } else {
+      bankAccountName = normalizeBankAccountName(req.body.bankAccountName);
+    }
 
     const { btcIdr, fetchedAt } = await fetchBtcIdrQuoteCached();
     const requestedSats = Number(req.body.satAmount || 0);
@@ -1075,6 +1116,29 @@ app.get("/api/wallet/arbitrum-receive-address", async (_req, res) => {
     });
   } catch (error) {
     log.error("api", "GET /api/wallet/arbitrum-receive-address failed", error);
+    return res.status(500).json({ error: error instanceof Error ? error.message : "Failed to derive address" });
+  }
+});
+
+app.get("/api/wallet/base-receive-address", async (_req, res) => {
+  try {
+    const seed = process.env.WDK_SEED?.trim();
+    if (!seed) {
+      return res.status(400).json({ error: "WDK_SEED is not configured on the server." });
+    }
+    const derived = deriveBaseErc4337ReceiveAddress(seed);
+    log.info("api", "GET /api/wallet/base-receive-address", {
+      chainId: derived.chainId,
+      safePrefix: derived.safeAddress.slice(0, 10),
+    });
+    return res.json({
+      chainId: derived.chainId,
+      ownerAddress: derived.ownerAddress,
+      safeAddress: derived.safeAddress,
+      note: "ERC-4337 Safe counterfactual address on Base (same seed/path as Arbitrum; LiFi IDRX recipient + burn).",
+    });
+  } catch (error) {
+    log.error("api", "GET /api/wallet/base-receive-address failed", error);
     return res.status(500).json({ error: error instanceof Error ? error.message : "Failed to derive address" });
   }
 });

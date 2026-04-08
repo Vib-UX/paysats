@@ -1,7 +1,8 @@
 import { Contract, JsonRpcProvider } from "ethers";
 import { hashBankAccountForIdrxBurn } from "./bankIdrx.js";
+import { burnIdrxWithBaseWdk } from "./baseWdk4337.js";
 import {
-  burnIdrxWithAccountNumber,
+  idrxHumanIdrToRaw,
   rawToIdrxHuman,
   readIdrxDecimalsOnBase,
   waitForIdrxBalance,
@@ -11,8 +12,8 @@ import {
   idrxBaseRecipientAddress,
   idrxBcaBankCode,
   idrxBcaBankName,
+  idrxBurnAmountIdr,
   requireBaseRpcUrl,
-  requireIdrxBurnPrivateKey,
 } from "./idrxConfig.js";
 import { postIdrxRedeemRequest } from "./idrxRedeem.js";
 import { log } from "./logger.js";
@@ -31,22 +32,45 @@ async function readIdrxBalanceRaw(holder: string): Promise<bigint> {
 }
 
 export type BankIdrxBurnResult = {
+  /** L2 bundle tx hash for IDRX `redeem-request` `txHash` (not ERC-4337 userOp hash). */
   burnTxHash: string;
+  burnUserOpHash?: string;
   amountTransfer: string;
   holderAddress: string;
 };
 
 /**
- * After LiFi delivers IDRX on Base: wait for balance, burn full balance with bank hash.
+ * After LiFi delivers IDRX on Base: wait for balance, burn whole IDR for redeem.
+ * Prefer `burnAmountIdr` from the order (UI idrAmount); else `IDRX_BURN_AMOUNT_IDR` env (default 21000).
+ * Burns `min(requested, on-chain balance)` if the bridge delivers less than requested (logs a warning).
  */
 export async function runBankIdrxBurnOnly(params: {
   orderId: string;
   recipientDigits: string;
   idrxAmountMinRaw: string;
+  /** Whole IDR from offramp order (`idrAmount`); optional for scripts / tests. */
+  burnAmountIdr?: number;
 }): Promise<BankIdrxBurnResult> {
+  const seed = process.env.WDK_SEED?.trim();
+  if (!seed) {
+    throw new Error("WDK_SEED is required for IDRX burn on Base (ERC-4337).");
+  }
+
   const holder = idrxBaseRecipientAddress();
-  const pk = requireIdrxBurnPrivateKey();
   const decimals = await readIdrxDecimalsOnBase();
+
+  const fromOrder =
+    params.burnAmountIdr != null &&
+    Number.isFinite(params.burnAmountIdr) &&
+    params.burnAmountIdr > 0
+      ? Math.floor(params.burnAmountIdr)
+      : null;
+  const requestedHuman = fromOrder ?? idrxBurnAmountIdr();
+  if (requestedHuman < IDRX_MIN_REDEEM_IDR) {
+    throw new Error(
+      `IDRX burn amount (${requestedHuman} IDR) is below IDRX_MIN_REDEEM_IDR (${IDRX_MIN_REDEEM_IDR})`,
+    );
+  }
 
   const minRedeemRaw =
     BigInt(IDRX_MIN_REDEEM_IDR) * 10n ** BigInt(decimals);
@@ -57,6 +81,10 @@ export async function runBankIdrxBurnOnly(params: {
   } catch {
     minRaw = minRedeemRaw;
   }
+  const requestedRaw = idrxHumanIdrToRaw(BigInt(requestedHuman), decimals);
+  if (minRaw < requestedRaw) {
+    minRaw = requestedRaw;
+  }
 
   const maxWaitMs =
     Number(process.env.IDRX_BRIDGE_MAX_WAIT_MS?.trim() || "1800000") || 1_800_000;
@@ -65,6 +93,7 @@ export async function runBankIdrxBurnOnly(params: {
   log.info("idrx", "waiting for IDRX on Base after LiFi", {
     orderId: params.orderId,
     minRaw: minRaw.toString(),
+    requestedHumanIdr: requestedHuman,
     maxWaitMs,
   });
 
@@ -76,29 +105,35 @@ export async function runBankIdrxBurnOnly(params: {
   });
 
   const bal = await readIdrxBalanceRaw(holder);
-  if (bal <= 0n) {
-    throw new Error("IDRX balance on Base is zero after wait");
+  const balHuman = Math.floor(rawToIdrxHuman(bal, decimals));
+  const burnHumanIdr = Math.min(requestedHuman, balHuman);
+  if (burnHumanIdr < IDRX_MIN_REDEEM_IDR) {
+    throw new Error(
+      `IDRX on Base is ${balHuman} IDR (raw ${bal.toString()}); need ≥ ${IDRX_MIN_REDEEM_IDR} IDR to burn (requested ${requestedHuman}).`,
+    );
   }
-
-  const hashBinding = hashBankAccountForIdrxBurn(params.recipientDigits);
-  const { txHash } = await burnIdrxWithAccountNumber({
-    privateKey: pk,
-    amountRaw: bal,
-    hashedAccountNumberHex: hashBinding,
-  });
-
-  const humanTransfer = Math.floor(rawToIdrxHuman(bal, decimals));
-  if (humanTransfer < IDRX_MIN_REDEEM_IDR) {
-    log.warn("idrx", "burn human amount below IDRX minimum (redeem may fail)", {
+  if (burnHumanIdr < requestedHuman) {
+    log.warn("idrx", "burning less than order idrAmount — using on-chain balance", {
       orderId: params.orderId,
-      humanTransfer,
-      min: IDRX_MIN_REDEEM_IDR,
+      requestedHuman,
+      burnHumanIdr,
+      balHuman,
     });
   }
 
+  const burnRaw = idrxHumanIdrToRaw(BigInt(burnHumanIdr), decimals);
+  const hashBinding = hashBankAccountForIdrxBurn(params.recipientDigits);
+  const { txHash, userOpHash } = await burnIdrxWithBaseWdk({
+    seed,
+    expectedSafeAddress: holder,
+    amountRaw: burnRaw,
+    hashedAccountNumberHex: hashBinding,
+  });
+
   return {
     burnTxHash: txHash,
-    amountTransfer: String(humanTransfer),
+    burnUserOpHash: userOpHash,
+    amountTransfer: String(burnHumanIdr),
     holderAddress: holder,
   };
 }

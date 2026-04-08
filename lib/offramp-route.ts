@@ -24,6 +24,8 @@ export type OfframpOrderFields = {
   p2pmOrderId?: string | null;
   p2pmPayoutMethod?: string | null;
   payoutRecipient?: string | null;
+  /** BCA holder name for IDRX redeem-request (bank_transfer). */
+  bankAccountName?: string | null;
   idrAmount?: number | null;
   usdtAmount?: number | null;
   usdcAmount?: number | null;
