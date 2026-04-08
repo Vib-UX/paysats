@@ -1,5 +1,7 @@
 /**
- * Build expandable “route” hops for the offramp pipeline (LN → Boltz → LiFi → p2p.me → IDR).
+ * Build expandable “route” hops for the offramp pipeline.
+ * Bank: LN → Boltz → LiFi (USDT→IDRX Base) → burn/redeem → IDR.
+ * GoPay: LN → Boltz → LiFi (USDT→USDC) → p2p.me → IDR.
  */
 import { ORDER_STATES, type OrderState } from "@/lib/state";
 
@@ -22,9 +24,14 @@ export type OfframpOrderFields = {
   p2pmOrderId?: string | null;
   p2pmPayoutMethod?: string | null;
   payoutRecipient?: string | null;
+  /** BCA holder name for IDRX redeem-request (bank_transfer). */
+  bankAccountName?: string | null;
   idrAmount?: number | null;
   usdtAmount?: number | null;
   usdcAmount?: number | null;
+  idrxAmountIdr?: number | null;
+  idrxBurnTxHash?: string | null;
+  idrxRedeemId?: string | null;
 };
 
 export type RouteHopLink = { label: string; href: string };
@@ -41,7 +48,9 @@ const VALIDATE_PAYMENT_ORIGIN = "https://validate-payment.com/";
 /** Swap + claim UI (automation waits for “OPEN CLAIM TRANSACTION” on this page). */
 const BOLTZ_BETA_SWAP_BASE = "https://beta.boltz.exchange/swap/";
 const ARBISCAN_TX = "https://arbiscan.io/tx/";
+const BASESCAN_TX = "https://basescan.org/tx/";
 const P2P_APP = "https://app.p2p.me";
+const IDRX_DOCS = "https://docs.idrx.co/integration/processing-redeem-idrx-requests";
 
 /** @see https://validate-payment.com/ — invoice + preimage proof (same pattern as user funding proof). */
 function buildValidatePaymentProofHref(invoice: string, preimage: string): string {
@@ -68,6 +77,8 @@ function idx(state: string): number {
  * marks every hop as done. Infer real progress from persisted order fields instead.
  */
 function progressIndexWhenFailed(order: OfframpOrderFields): number {
+  if (order.idrxRedeemId?.trim()) return idx("P2PM_ORDER_CONFIRMED");
+  if (order.idrxBurnTxHash?.trim()) return idx("P2PM_ORDER_PLACED");
   if (order.swapTxHash) return idx("USDC_SWAPPED");
   if (order.p2pmOrderId) return idx("P2PM_ORDER_PLACED");
   if (order.usdtAmount != null && order.usdtAmount > 0) return idx("USDT_RECEIVED");
@@ -85,7 +96,7 @@ function effectiveStateIndex(order: OfframpOrderFields, stateStr: string): numbe
 
 export function maskPayoutRecipient(
   method: string | null | undefined,
-  raw: string | null | undefined
+  raw: string | null | undefined,
 ): string {
   if (!raw) return "—";
   const mth = (method || "").toLowerCase();
@@ -128,14 +139,14 @@ export function buildOfframpRouteHops(order: OfframpOrderFields | null | undefin
   };
 
   const swapTxReady = Boolean(order.swapTxHash?.trim());
-  /**
-   * p2p.me + BCA/GoPay hops: treat as done once LiFi USDT→USDC finished and we have the tx link
-   * (remaining work is merchant / fiat off-chain).
-   */
-  const tailMilestonesDone = !failed && swapTxReady;
+  const idrxBurnReady = Boolean(order.idrxBurnTxHash?.trim());
+  const idrxRedeemReady = Boolean(order.idrxRedeemId?.trim());
+
+  /** GoPay: after LiFi, treat tail as done once swap tx known (p2p off-chain). Bank: after redeem id. */
+  const tailMilestonesDone = !failed && (bankBca ? idrxRedeemReady : swapTxReady);
   const tailMilestonesActive =
     !failed &&
-    !swapTxReady &&
+    !tailMilestonesDone &&
     (stateStr === "USDC_SWAPPED" ||
       stateStr === "P2PM_ORDER_PLACED" ||
       stateStr === "P2PM_ORDER_CONFIRMED" ||
@@ -157,30 +168,29 @@ export function buildOfframpRouteHops(order: OfframpOrderFields | null | undefin
   if (fundInv?.startsWith("ln") && fundPre) {
     fundingLinks.push({
       label: "Lightning payment proof (funding)",
-      href: buildValidatePaymentProofHref(fundInv, fundPre)
+      href: buildValidatePaymentProofHref(fundInv, fundPre),
     });
   } else if (fundInv?.startsWith("ln")) {
     fundingLinks.push({
       label: "Lightning invoice (validate-payment.com)",
-      href: buildValidatePaymentInvoiceHref(fundInv)
+      href: buildValidatePaymentInvoiceHref(fundInv),
     });
   }
 
-  const fundingDesc =
-    fundingDone
-      ? `Funding invoice settled on Lightning.${
-          order.invoicePaymentHash
-            ? ` Payment hash: ${order.invoicePaymentHash.slice(0, 18)}…`
-            : ""
-        }`
-      : "Pay the QR invoice (or WebLN) to start the route.";
+  const fundingDesc = fundingDone
+    ? `Funding invoice settled on Lightning.${
+        order.invoicePaymentHash
+          ? ` Payment hash: ${order.invoicePaymentHash.slice(0, 18)}…`
+          : ""
+      }`
+    : "Pay the QR invoice (or WebLN) to start the route.";
 
   hops.push({
     id: "funding-ln",
     title: "Your Lightning payment",
     description: fundingDesc,
     status: hopStatus(fundingDone, !fundingDone && si <= routeShown),
-    links: fundingLinks
+    links: fundingLinks,
   });
 
   // 2. Agent pays Boltz swap invoice (LN → USDT Arbitrum)
@@ -190,25 +200,25 @@ export function buildOfframpRouteHops(order: OfframpOrderFields | null | undefin
   if (boltzInv?.startsWith("ln") && boltzPre) {
     boltzLinks.push({
       label: "Lightning payment proof (Boltz invoice)",
-      href: buildValidatePaymentProofHref(boltzInv, boltzPre)
+      href: buildValidatePaymentProofHref(boltzInv, boltzPre),
     });
   } else if (boltzInv?.startsWith("ln")) {
     boltzLinks.push({
       label: "Lightning invoice (validate-payment.com)",
-      href: buildValidatePaymentInvoiceHref(boltzInv)
+      href: buildValidatePaymentInvoiceHref(boltzInv),
     });
   }
   const boltzSid = order.boltzSwapId?.trim();
   if (boltzSid) {
     boltzLinks.push({
       label: "View swap on Boltz",
-      href: boltzBetaSwapPageHref(boltzSid)
+      href: boltzBetaSwapPageHref(boltzSid),
     });
   }
   if (order.boltzTxHash) {
     boltzLinks.push({
       label: "Open claim transaction (Arbiscan)",
-      href: `${ARBISCAN_TX}${order.boltzTxHash}`
+      href: `${ARBISCAN_TX}${order.boltzTxHash}`,
     });
   }
 
@@ -221,64 +231,90 @@ export function buildOfframpRouteHops(order: OfframpOrderFields | null | undefin
         ? "Paying Boltz invoice and confirming USDT on Arbitrum…"
         : "Waiting for your Lightning payment first.",
     status: hopStatus(boltzAgentDone, boltzAgentActive),
-    links: boltzLinks
+    links: boltzLinks,
   });
 
-  // 3. LiFi USDT → USDC
+  // 3. LiFi — USDC (GoPay) or IDRX (BCA bank)
   const swapLinks: RouteHopLink[] = [];
   if (order.swapTxHash) {
     swapLinks.push({
-      label: "USDT → USDC (Arbitrum userOp / tx)",
-      href: `${ARBISCAN_TX}${order.swapTxHash}`
+      label: bankBca
+        ? "USDT → IDRX (Arbitrum userOp / tx)"
+        : "USDT → USDC (Arbitrum userOp / tx)",
+      href: `${ARBISCAN_TX}${order.swapTxHash}`,
     });
   }
+
+  const lifiTitle = bankBca
+    ? "LiFi: USDT → IDRX (Arbitrum → Base)"
+    : "LiFi: USDT → USDC (Arbitrum → Base)";
+  const lifiDescDone = bankBca
+    ? "Cross-chain swap submitted; IDRX lands on the Base custody wallet for burn & redeem."
+    : "Cross-chain swap submitted; USDC targets your Base recipient.";
+  const lifiDescActive = bankBca
+    ? "Quoting LiFi, approving USDT, bridging to Base IDRX…"
+    : "Quoting LiFi, approving USDT, executing bridge/swap…";
 
   hops.push({
     id: "lifi",
-    title: "LiFi: USDT → USDC (Arbitrum → Base)",
+    title: lifiTitle,
     description: liFiDone
-      ? "Cross-chain swap submitted; USDC targets your Base recipient."
+      ? lifiDescDone
       : liFiActive
-        ? "Quoting LiFi, approving USDT, executing bridge/swap…"
+        ? lifiDescActive
         : "Runs after USDT is available on the agent Safe.",
     status: hopStatus(liFiDone, liFiActive),
-    links: swapLinks
+    links: swapLinks,
   });
 
-  // 4. p2p.me merchant
-  const p2pLinks: RouteHopLink[] = [
-    { label: "p2p.me app", href: P2P_APP }
-  ];
-  if (order.p2pmOrderId) {
-    p2pLinks.unshift({
-      label: `Order ref · ${order.p2pmOrderId.slice(0, 14)}…`,
-      href: `${P2P_APP}/sell`
+  // 4. BCA: IDRX burn + redeem API — GoPay: p2p.me
+  if (bankBca) {
+    const idrxLinks: RouteHopLink[] = [{ label: "IDRX redeem docs", href: IDRX_DOCS }];
+    if (order.idrxBurnTxHash?.trim()) {
+      idrxLinks.unshift({
+        label: "IDRX burn (Base)",
+        href: `${BASESCAN_TX}${order.idrxBurnTxHash.trim()}`,
+      });
+    }
+
+    hops.push({
+      id: "idrx-burn-redeem",
+      title: "IDRX burn & redeem (Base)",
+      description: idrxRedeemReady
+        ? `Burn confirmed on Base; redeem request submitted (ref ${order.idrxRedeemId?.slice(0, 12) ?? "—"}…).`
+        : idrxBurnReady
+          ? "Burn on Base confirmed; submitting signed redeem-request to IDRX…"
+          : swapTxReady
+            ? "Waiting for IDRX on Base, then burn with hashed bank binding and redeem to your BCA account."
+            : failed && idrxBurnReady
+              ? "Burn step did not complete redeem; check IDRX dashboard or support with burn tx."
+              : "Starts after IDRX arrives on Base from the LiFi step.",
+      status: hopStatus(idrxRedeemReady, swapTxReady && !idrxRedeemReady),
+      links: idrxLinks,
+    });
+  } else {
+    const p2pLinks: RouteHopLink[] = [{ label: "p2p.me app", href: P2P_APP }];
+    if (order.p2pmOrderId) {
+      p2pLinks.unshift({
+        label: `Order ref · ${order.p2pmOrderId.slice(0, 14)}…`,
+        href: `${P2P_APP}/sell`,
+      });
+    }
+
+    hops.push({
+      id: "p2p",
+      title: "p2p.me merchant (USDC → IDR)",
+      description: tailMilestonesDone
+        ? "USDC is in place after the LiFi swap (see link above). Merchant / IDR flow is wired from here."
+        : tailMilestonesActive
+          ? "Waiting for the USDT→USDC swap transaction link…"
+          : failed && order.p2pmOrderId
+            ? "p2p.me step did not finish; check the app or support with your order ref."
+            : "Starts after USDC is available for the offramp.",
+      status: hopStatus(tailMilestonesDone, tailMilestonesActive),
+      links: p2pLinks,
     });
   }
-
-  const p2pTitle = bankBca
-    ? "p2p.me merchant (USDC → IDR via IDRX)"
-    : "p2p.me merchant (USDC → IDR)";
-  const p2pDescDone = bankBca
-    ? "USDC is in place after the LiFi swap (see link above). For BCA, IDRX liquidates to IDR; merchant flow continues from here."
-    : "USDC is in place after the LiFi swap (see link above). Merchant / IDR flow is wired from here.";
-  const p2pDescPending = bankBca
-    ? "Starts after USDC is available; BCA payouts are described as IDRX → IDR in this route."
-    : "Starts after USDC is available for the offramp.";
-
-  hops.push({
-    id: "p2p",
-    title: p2pTitle,
-    description: tailMilestonesDone
-      ? p2pDescDone
-      : tailMilestonesActive
-        ? "Waiting for the USDT→USDC swap transaction link…"
-        : failed && order.p2pmOrderId
-          ? "p2p.me step did not finish; check the app or support with your order ref."
-          : p2pDescPending,
-    status: hopStatus(tailMilestonesDone, tailMilestonesActive),
-    links: p2pLinks
-  });
 
   // 5. Final IDR to BCA / GoPay
   const mask = maskPayoutRecipient(order.p2pmPayoutMethod, order.payoutRecipient);
@@ -289,10 +325,10 @@ export function buildOfframpRouteHops(order: OfframpOrderFields | null | undefin
     ? `Final payout complete. ${idrN} to ${pl} ${mask} via IDRX liquidation to IDR.`
     : `Final payout complete. ${idrN} to ${pl} ${mask}.`;
   const fiatDescDoneInProgress = bankBca
-    ? `Payout path to ${pl} ${mask} — IDRX → IDR after USDC from the swap (LiFi link above).`
+    ? `Payout path to ${pl} ${mask} — IDRX → IDR after redeem is accepted (see burn/redeem step).`
     : `Payout path to ${pl} ${mask} — proceeds after USDC from the swap (LiFi link above).`;
   const fiatDescDest = bankBca
-    ? `Destination: ${pl} ${mask}; route shows IDRX liquidating to IDR.`
+    ? `Destination: ${pl} ${mask}; IDRX burn and redeem route your IDR.`
     : `Destination: ${pl} ${mask}.`;
 
   hops.push({
@@ -303,12 +339,14 @@ export function buildOfframpRouteHops(order: OfframpOrderFields | null | undefin
         ? fiatDescDoneCompleted
         : fiatDescDoneInProgress
       : tailMilestonesActive
-        ? `Waiting for swap confirmation and explorer link before marking ${pl} ${mask} ready.`
+        ? bankBca
+          ? `IDRX burn and bank redeem in progress for ${pl} ${mask}.`
+          : `Waiting for swap confirmation and explorer link before marking ${pl} ${mask} ready.`
         : failed
           ? `Payout to ${pl} ${mask} was not completed. Check status or support.`
           : fiatDescDest,
     status: hopStatus(tailMilestonesDone, tailMilestonesActive),
-    links: []
+    links: [],
   });
 
   return hops;

@@ -1,5 +1,5 @@
 /**
- * Arbitrum USDT → Base USDC via LiFi + Tether WDK ERC-4337 (same flow as scripts/lifi-exec-arb-usdt-base-usdc.ts).
+ * Arbitrum USDT → Base destination token via LiFi + Tether WDK ERC-4337.
  */
 import { WalletAccountEvmErc4337 } from "@tetherto/wdk-wallet-evm-erc-4337";
 import type { EvmErc4337WalletConfig } from "@tetherto/wdk-wallet-evm-erc-4337";
@@ -7,17 +7,29 @@ import {
   DEFAULT_WDK_EVM_PATH_SUFFIX,
   deriveArbitrumErc4337ReceiveAddress,
 } from "./arbitrumErc4337Address.js";
-import { fetchLifiQuote, LIFI_USDT_ARBITRUM } from "./lifiQuote.js";
+import {
+  fetchLifiQuote,
+  LIFI_IDRX_BASE,
+  LIFI_USDT_ARBITRUM,
+  LIFI_USDC_BASE,
+} from "./lifiQuote.js";
+import { readIdrxDecimalsOnBase } from "./idrxBurn.js";
+import { idrxBaseRecipientAddress } from "./idrxConfig.js";
 import { log } from "./logger.js";
 
 const USDC_ORDER_CAP = 100;
+
+const IDRX_MIN_REDEEM_IDR =
+  Number(process.env.IDRX_MIN_REDEEM_IDR?.trim() || "20000") || 20_000;
+const IDRX_MAX_ORDER_IDR =
+  Number(process.env.IDRX_MAX_ORDER_IDR?.trim() || "1000000000") || 1_000_000_000;
 
 /** Pimlico ERC-20 paymaster (EntryPoint v0.7) */
 const PIMLICO_ERC20_PAYMASTER_V07 =
   "0x777777777777AeC03fd955926DbF81597e66834C";
 const ENTRY_POINT_V07 = "0x0000000071727De22E5E9d8BAf0edAc6f37da032";
 
-/** Default Base USDC recipient when `LIFI_TO_ADDRESS` is unset (matches offramp pipeline). */
+/** Default Base USDC recipient when `LIFI_TO_ADDRESS` is unset. */
 const LIFI_DEFAULT_TO_ADDRESS = "0x8A42b6Ba4f44cA186fb9Fc748beBDB3270C9aCb7";
 
 function sleep(ms: number): Promise<void> {
@@ -94,28 +106,36 @@ function build4337Config(): EvmErc4337WalletConfig {
   return base as EvmErc4337WalletConfig;
 }
 
-function toUsdcHuman(estimateToAmount: string | undefined): number {
+function rawToHuman(
+  estimateToAmount: string | undefined,
+  decimals: number,
+): number {
   if (!estimateToAmount) return 0;
   const raw = BigInt(estimateToAmount);
-  return Number(raw) / 1e6;
+  return Number(raw) / 10 ** decimals;
 }
 
-export async function executeUsdtToUsdcSwap(params: {
+async function runLifiArbUsdtToBaseToken(params: {
   usdtAmount: number;
-  walletAddress: string;
-  /** Raw fromAmount for LiFi (6 decimals). Overrides floor(usdtAmount * 1e6) when set. */
+  /** Raw USDT amount in 6 decimals; overrides floor(usdtAmount * 1e6) when set. */
   fromAmountMinUnits?: string;
-  /** Quote recipient on Base; defaults to `LIFI_TO_ADDRESS` env or pipeline default. */
-  toAddress?: string;
-}): Promise<{ usdcAmount: number; txHash: string }> {
+  walletAddress: string;
+  toToken: string;
+  toAddress: string;
+  destDecimals: number;
+  maxDestHuman: number;
+  minDestHuman?: number;
+  logLabel: string;
+}): Promise<{
+  destAmountHuman: number;
+  destAmountMinRaw: string;
+  txHash: string;
+}> {
   if (params.usdtAmount <= 0) {
     throw new Error("USDT amount must be greater than zero.");
   }
-  if (params.usdtAmount > USDC_ORDER_CAP) {
-    throw new Error("Hard cap exceeded: maximum 100 USDC per order.");
-  }
   if (!params.walletAddress?.trim()) {
-    throw new Error("Missing wallet address for USDT -> USDC swap.");
+    throw new Error("Missing wallet address for USDT -> destination swap.");
   }
 
   const apiKey = process.env.LIFI_API_KEY?.trim();
@@ -139,16 +159,35 @@ export async function executeUsdtToUsdcSwap(params: {
     params.fromAmountMinUnits?.trim() ||
     String(Math.max(1, Math.floor(params.usdtAmount * 1e6)));
 
-  const toAddress =
-    params.toAddress?.trim() ||
-    process.env.LIFI_TO_ADDRESS?.trim() ||
-    LIFI_DEFAULT_TO_ADDRESS;
+  const quote = await fetchLifiQuote({
+    apiKey,
+    fromAddress: safeAddress,
+    toAddress: params.toAddress,
+    fromAmount,
+    toToken: params.toToken,
+    slippage: process.env.LIFI_SLIPPAGE?.trim() || "0.03",
+  });
 
-  log.info("swap", "WDK+LiFi swap start", {
+  const humanMin = rawToHuman(quote.estimate?.toAmountMin, params.destDecimals);
+  const humanEst = rawToHuman(quote.estimate?.toAmount, params.destDecimals);
+
+  if (params.minDestHuman != null && humanMin + 1e-12 < params.minDestHuman) {
+    throw new Error(
+      `LiFi ${params.logLabel} toAmountMin (${humanMin}) is below minimum (${params.minDestHuman} IDR).`,
+    );
+  }
+  if (humanEst > params.maxDestHuman + 1e-9) {
+    throw new Error(
+      `LiFi ${params.logLabel} estimate (${humanEst}) exceeds cap (${params.maxDestHuman}).`,
+    );
+  }
+
+  log.info("swap", `WDK+LiFi swap start (${params.logLabel})`, {
     safePrefix: `${safeAddress.slice(0, 10)}…${safeAddress.slice(-6)}`,
-    toPrefix: `${toAddress.slice(0, 10)}…${toAddress.slice(-6)}`,
+    toPrefix: `${params.toAddress.slice(0, 10)}…${params.toAddress.slice(-6)}`,
     fromAmountMinUnits: fromAmount,
-    paymaster: resolvePaymasterContractAddress(),
+    humanMin,
+    humanEst,
   });
 
   const wallet = new WalletAccountEvmErc4337(
@@ -172,14 +211,6 @@ export async function executeUsdtToUsdcSwap(params: {
     );
   }
 
-  const quote = await fetchLifiQuote({
-    apiKey,
-    fromAddress: safeAddress,
-    toAddress,
-    fromAmount,
-    slippage: process.env.LIFI_SLIPPAGE?.trim() || "0.03",
-  });
-
   const approvalAddress = quote.estimate?.approvalAddress;
   const tr = quote.transactionRequest;
   const fromAmt = quote.action?.fromAmount;
@@ -191,6 +222,7 @@ export async function executeUsdtToUsdcSwap(params: {
   }
 
   log.info("swap", "LiFi quote ok", {
+    label: params.logLabel,
     tool: quote.toolDetails?.name || quote.tool,
     toAmountMin: quote.estimate?.toAmountMin,
     toAmount: quote.estimate?.toAmount,
@@ -218,7 +250,9 @@ export async function executeUsdtToUsdcSwap(params: {
     });
   }
 
-  log.info("swap", "executing LiFi transactionRequest");
+  log.info("swap", "executing LiFi transactionRequest", {
+    label: params.logLabel,
+  });
   const { hash: swapHash } = await wallet.sendTransaction({
     to: tr.to,
     value: BigInt(tr.value ?? "0"),
@@ -229,12 +263,81 @@ export async function executeUsdtToUsdcSwap(params: {
     userOpHashPrefix: swapHash.slice(0, 18),
   });
 
-  const usdcAmount =
-    toUsdcHuman(quote.estimate?.toAmount) ||
-    toUsdcHuman(quote.estimate?.toAmountMin);
+  const destAmountHuman =
+    rawToHuman(quote.estimate?.toAmount, params.destDecimals) ||
+    rawToHuman(quote.estimate?.toAmountMin, params.destDecimals);
+
+  const destAmountMinRaw = quote.estimate?.toAmountMin ?? "0";
 
   return {
-    usdcAmount,
+    destAmountHuman,
+    destAmountMinRaw,
     txHash: swapHash,
+  };
+}
+
+export async function executeUsdtToUsdcSwap(params: {
+  usdtAmount: number;
+  walletAddress: string;
+  fromAmountMinUnits?: string;
+  toAddress?: string;
+}): Promise<{ usdcAmount: number; txHash: string }> {
+  if (params.usdtAmount > USDC_ORDER_CAP) {
+    throw new Error("Hard cap exceeded: maximum 100 USDC per order.");
+  }
+
+  const toAddress =
+    params.toAddress?.trim() ||
+    process.env.LIFI_TO_ADDRESS?.trim() ||
+    LIFI_DEFAULT_TO_ADDRESS;
+
+  const fromAmtStr =
+    params.fromAmountMinUnits?.trim() ||
+    String(Math.max(1, Math.floor(params.usdtAmount * 1e6)));
+  const usdtEff = Number(fromAmtStr) / 1e6;
+  if (!Number.isFinite(usdtEff) || usdtEff > USDC_ORDER_CAP) {
+    throw new Error("Hard cap exceeded: maximum 100 USDC per order.");
+  }
+
+  const r = await runLifiArbUsdtToBaseToken({
+    usdtAmount: params.usdtAmount,
+    fromAmountMinUnits: params.fromAmountMinUnits,
+    walletAddress: params.walletAddress,
+    toToken: LIFI_USDC_BASE,
+    toAddress,
+    destDecimals: 6,
+    maxDestHuman: USDC_ORDER_CAP,
+    logLabel: "USDT→USDC",
+  });
+
+  return { usdcAmount: r.destAmountHuman, txHash: r.txHash };
+}
+
+export async function executeUsdtToIdrxOnBase(params: {
+  usdtAmount: number;
+  walletAddress: string;
+}): Promise<{
+  idrxAmountIdr: number;
+  idrxAmountMinRaw: string;
+  txHash: string;
+}> {
+  const decimals = await readIdrxDecimalsOnBase();
+  const toAddress = idrxBaseRecipientAddress();
+
+  const r = await runLifiArbUsdtToBaseToken({
+    usdtAmount: params.usdtAmount,
+    walletAddress: params.walletAddress,
+    toToken: LIFI_IDRX_BASE,
+    toAddress,
+    destDecimals: decimals,
+    maxDestHuman: IDRX_MAX_ORDER_IDR,
+    minDestHuman: IDRX_MIN_REDEEM_IDR,
+    logLabel: "USDT→IDRX(Base)",
+  });
+
+  return {
+    idrxAmountIdr: r.destAmountHuman,
+    idrxAmountMinRaw: r.destAmountMinRaw,
+    txHash: r.txHash,
   };
 }

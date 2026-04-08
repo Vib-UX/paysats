@@ -29,6 +29,8 @@ model Order {
   satAmount        Int        @default(0)
   usdtAmount       Float?
   usdcAmount       Float?
+  /** Human IDR face value of IDRX received on Base (bank / IDRX path). */
+  idrxAmountIdr    Float?
   idrAmount        Float?
   btcIdr           Float?
   btcIdrFetchedAt  DateTime?
@@ -42,6 +44,12 @@ model Order {
   p2pmOrderId      String?
   p2pmPayoutMethod String?
   payoutRecipient  String?
+  /** Display / legal name for IDRX redeem (bank transfer). */
+  bankAccountName  String?
+  /** Base chain burn tx (IDRX burnWithAccountNumber). */
+  idrxBurnTxHash   String?
+  /** IDRX redeem-request API data.id when returned. */
+  idrxRedeemId     String?
   invoiceBolt11    String?
   invoiceExpiresAt DateTime?
   invoicePaidAt    DateTime?

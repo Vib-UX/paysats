@@ -109,6 +109,8 @@ export default function OfframpPage() {
   const [payoutMethod, setPayoutMethod] =
     useState<PayoutMethod>("bank_transfer");
   const [recipient, setRecipient] = useState("");
+  /** BCA account holder — sent to IDRX redeem-request `bankAccountName`. */
+  const [bankAccountName, setBankAccountName] = useState("");
 
   const [btcIdr, setBtcIdr] = useState<number | null>(null);
   const [usdcIdr, setUsdcIdr] = useState<number | null>(null);
@@ -160,14 +162,19 @@ export default function OfframpPage() {
     return d.length >= 8 && d.length <= 16;
   }, [payoutMethod, recipientNormalized]);
 
+  const bankNameValid = useMemo(() => {
+    if (payoutMethod !== "bank_transfer") return true;
+    return bankAccountName.trim().length >= 2;
+  }, [payoutMethod, bankAccountName]);
+
   const amountValid = useMemo(() => {
     if (lastEdited === "idr") return Number.isFinite(idrNum) && idrNum > 0;
     return Number.isFinite(satsNum) && satsNum > 0;
   }, [idrNum, satsNum, lastEdited]);
 
   const canPay = useMemo(
-    () => amountValid && recipientValid && !loadingPay,
-    [amountValid, recipientValid, loadingPay],
+    () => amountValid && recipientValid && bankNameValid && !loadingPay,
+    [amountValid, recipientValid, bankNameValid, loadingPay],
   );
 
   useEffect(() => {
@@ -260,11 +267,17 @@ export default function OfframpPage() {
               idrAmount: idrNum,
               payoutMethod,
               recipientDetails: recipientNormalized,
+              ...(payoutMethod === "bank_transfer"
+                ? { bankAccountName: bankAccountName.trim() }
+                : {}),
             }
           : {
               satAmount: satsNum,
               payoutMethod,
               recipientDetails: recipientNormalized,
+              ...(payoutMethod === "bank_transfer"
+                ? { bankAccountName: bankAccountName.trim() }
+                : {}),
             };
 
       const res = await backendFetch("/api/offramp/create", {
@@ -686,6 +699,29 @@ export default function OfframpPage() {
                   : "Enter a valid BCA account number."}
               </p>
             ) : null}
+
+            {payoutMethod === "bank_transfer" ? (
+              <>
+                <label className="mt-4 block text-sm font-semibold text-zinc-300">
+                  Account holder name (BCA)
+                </label>
+                <input
+                  type="text"
+                  autoComplete="name"
+                  enterKeyHint="done"
+                  placeholder="As registered with the bank"
+                  value={bankAccountName}
+                  onChange={(e) => setBankAccountName(e.target.value)}
+                  className="tap-target mt-1 w-full rounded-xl border border-border bg-card px-4 py-3 text-base font-semibold text-white outline-none focus:border-gold"
+                />
+                {!bankNameValid && bankAccountName ? (
+                  <p className="mt-2 text-xs text-red-400">
+                    Enter at least 2 characters (matches IDRX redeem).
+                  </p>
+                ) : null}
+              </>
+            ) : null}
+
             <p className="mt-2 text-xs text-zinc-500">
               Need to read a merchant QRIS first? Use Scan — your payout details
               here are still BCA or GoPay.
