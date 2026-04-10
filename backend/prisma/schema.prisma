@@ -51,6 +51,11 @@ model Order {
   /** IDRX redeem-request API data.id when returned. */
   idrxRedeemId     String?
   invoiceBolt11    String?
+  /** lightning | cbbtc | btcb — when set, user funds via wrapped BTC to EVM Safe instead of LN invoice. */
+  depositChannel     String?
+  depositChainId     Int?
+  depositTokenAddress String?
+  depositToAddress    String?
   invoiceExpiresAt DateTime?
   invoicePaidAt    DateTime?
   invoicePaymentHash String?

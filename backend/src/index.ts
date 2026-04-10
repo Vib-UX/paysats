@@ -7,14 +7,26 @@ import {
   requireArbitrumReceiveAddress
 } from "./arbitrumErc4337Address.js";
 import { deriveBaseErc4337ReceiveAddress } from "./baseErc4337Address.js";
+import { deriveBscErc4337ReceiveAddress } from "./bscErc4337Address.js";
 import { createBoltzSwap, getBoltzSwapStatus } from "./boltz.js";
 import { log } from "./logger.js";
 import { createInvoice, initNwc, payInvoice, payInvoiceWithRetries } from "./nwc.js";
 import { prisma } from "./prisma.js";
 import { OrderState, requireTransition } from "./state.js";
-import { executeUsdtToIdrxOnBase, executeUsdtToUsdcSwap } from "./swap.js";
+import {
+  executeBtcbToIdrxFromBsc,
+  executeCbbtcToIdrxOnBase,
+  executeUsdtToIdrxOnBase,
+  executeUsdtToUsdcSwap,
+} from "./swap.js";
 import { createP2pmSellOrder } from "./p2pm.js";
-import { fetchLifiQuote, LIFI_IDRX_BASE, LIFI_USDC_BASE } from "./lifiQuote.js";
+import {
+  fetchLifiQuote,
+  LIFI_BTCB_BSC,
+  LIFI_CBTC_BASE,
+  LIFI_IDRX_BASE,
+  LIFI_USDC_BASE,
+} from "./lifiQuote.js";
 import { idrxBaseRecipientAddress } from "./idrxConfig.js";
 import { runBankIdrxBurnOnly, runBankIdrxRedeemOnly } from "./idrxOfframp.js";
 import { waitForArbitrumUsdtBalance } from "./arbUsdtConfirm.js";
@@ -56,6 +68,10 @@ type MemoryOrder = {
   idrxAmountIdr?: number | null;
   merchantName?: string | null;
   qrisPayload?: string | null;
+  depositChannel?: string | null;
+  depositChainId?: number | null;
+  depositTokenAddress?: string | null;
+  depositToAddress?: string | null;
 };
 
 const memoryOrders = new Map<string, MemoryOrder>();
@@ -253,6 +269,18 @@ function normalizeBankAccountName(raw: unknown): string {
   const s = String(raw || "").trim();
   if (s) return s;
   return process.env.IDRX_DEFAULT_BANK_ACCOUNT_NAME?.trim() || "Paysats user";
+}
+
+function normalizeDepositChannel(raw: unknown): "lightning" | "cbbtc" | "btcb" {
+  const m = String(raw ?? "lightning").trim().toLowerCase();
+  if (m === "" || m === "lightning" || m === "ln") return "lightning";
+  if (m === "cbbtc") return "cbbtc";
+  if (m === "btcb") return "btcb";
+  throw new Error("Invalid depositChannel (expected lightning, cbbtc, or btcb)");
+}
+
+function evmDepositQrValue(toAddress: string, chainId: number): string {
+  return `ethereum:${toAddress}@${chainId}`;
 }
 
 function normalizeRecipientDetails(payoutMethod: "gopay" | "bank_transfer", raw: unknown): string {
@@ -935,6 +963,7 @@ app.post("/api/offramp/create", async (req, res) => {
     const payoutMethod = normalizePayoutMethod(req.body.payoutMethod);
     const recipientDetails = normalizeRecipientDetails(payoutMethod, req.body.recipientDetails);
     const bankAccountName = normalizeBankAccountName(req.body.bankAccountName);
+    const depositChannel = normalizeDepositChannel(req.body.depositChannel);
 
     const { btcIdr, fetchedAt } = await fetchBtcIdrQuoteCached();
     const requestedSats = Number(req.body.satAmount || 0);
@@ -950,6 +979,128 @@ app.post("/api/offramp/create", async (req, res) => {
 
     if (!Number.isFinite(satAmount) || satAmount <= 0) {
       return res.status(400).json({ error: "satAmount or idrAmount is required and must be positive" });
+    }
+
+    if (depositChannel !== "lightning") {
+      const seed = process.env.WDK_SEED?.trim();
+      if (!seed) {
+        return res.status(400).json({
+          error:
+            "WDK_SEED is not configured; cannot derive EVM deposit addresses for cbBTC/BTCB.",
+        });
+      }
+
+      let depositToAddress: string;
+      let depositChainId: number;
+      let depositTokenAddress: string;
+      let tokenSymbol: string;
+      let chainName: string;
+      let decimals: number;
+
+      if (depositChannel === "cbbtc") {
+        const d = deriveBaseErc4337ReceiveAddress(seed);
+        depositToAddress = d.safeAddress;
+        depositChainId = 8453;
+        depositTokenAddress = LIFI_CBTC_BASE;
+        tokenSymbol = "cbBTC";
+        chainName = "Base";
+        decimals = 8;
+      } else {
+        const d = deriveBscErc4337ReceiveAddress(seed);
+        depositToAddress = d.safeAddress;
+        depositChainId = 56;
+        depositTokenAddress = LIFI_BTCB_BSC;
+        tokenSymbol = "BTCB";
+        chainName = "BNB Chain";
+        decimals = 18;
+      }
+
+      const qrValue = evmDepositQrValue(depositToAddress, depositChainId);
+
+      let orderId: string;
+      try {
+        const order = await prisma.order.create({
+          data: {
+            state: "ROUTE_SHOWN",
+            satAmount,
+            idrAmount,
+            btcIdr,
+            btcIdrFetchedAt: new Date(fetchedAt),
+            p2pmPayoutMethod: payoutMethod,
+            payoutRecipient: recipientDetails,
+            bankAccountName,
+            invoiceBolt11: null,
+            invoiceExpiresAt: null,
+            depositChannel,
+            depositChainId,
+            depositTokenAddress,
+            depositToAddress,
+            merchantName: "Offramp",
+          } as any,
+        });
+        orderId = order.id;
+      } catch (e) {
+        if (!isDbAccessError(e)) throw e;
+        orderId = `mem_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+        const createdAt = nowIso();
+        memoryOrders.set(orderId, {
+          id: orderId,
+          state: "ROUTE_SHOWN",
+          satAmount,
+          idrAmount,
+          btcIdr,
+          btcIdrFetchedAt: fetchedAt,
+          p2pmPayoutMethod: payoutMethod,
+          payoutRecipient: recipientDetails,
+          bankAccountName,
+          invoiceBolt11: null,
+          invoiceExpiresAt: null,
+          depositChannel,
+          depositChainId,
+          depositTokenAddress,
+          depositToAddress,
+          createdAt,
+          updatedAt: createdAt,
+          completedAt: null,
+          merchantName: "Offramp",
+          qrisPayload: null,
+          boltzSwapId: null,
+          boltzLnInvoice: null,
+          boltzLnPreimage: null,
+          boltzTxHash: null,
+          swapTxHash: null,
+          p2pmOrderId: null,
+          usdtAmount: null,
+          usdcAmount: null,
+        });
+        log.warn("db", "DB unavailable; using in-memory order store", { orderId });
+      }
+
+      log.info("api", "offramp order created (wrapped deposit — no Lightning watcher)", {
+        orderId,
+        depositChannel,
+        satAmount,
+      });
+
+      return res.json({
+        orderId,
+        bolt11: null,
+        satAmount,
+        idrAmount,
+        btcIdr,
+        fetchedAt,
+        invoiceExpiresAt: null,
+        deposit: {
+          channel: depositChannel,
+          chainId: depositChainId,
+          chainName,
+          tokenSymbol,
+          tokenAddress: depositTokenAddress,
+          toAddress: depositToAddress,
+          decimals,
+          qrValue,
+        },
+      });
     }
 
     let client: Awaited<ReturnType<typeof initNwc>>["client"] | null = null;
@@ -1128,6 +1279,132 @@ app.get("/api/wallet/base-receive-address", async (_req, res) => {
   } catch (error) {
     log.error("api", "GET /api/wallet/base-receive-address failed", error);
     return res.status(500).json({ error: error instanceof Error ? error.message : "Failed to derive address" });
+  }
+});
+
+app.get("/api/wallet/deposit-rails", async (_req, res) => {
+  try {
+    const seed = process.env.WDK_SEED?.trim();
+    const bitcoinOnchain = {
+      label: "Bitcoin (on-chain)",
+      summary:
+        "Receive native BTC using Tether WDK Spark: single-use or static deposit addresses, then claim or route into settlement.",
+      wdkDocsUrl:
+        "https://docs.wdk.tether.io/sdk/wallet-modules/wallet-spark/usage/deposits-and-withdrawals",
+      apiMethods: [
+        "getSingleUseDepositAddress",
+        "getStaticDepositAddress",
+        "claimStaticDeposit",
+      ],
+    };
+
+    if (!seed) {
+      return res.json({
+        bitcoinOnchain,
+        configured: false,
+        error: "WDK_SEED is not configured; EVM receive addresses unavailable.",
+      });
+    }
+
+    const arb = deriveArbitrumErc4337ReceiveAddress(seed);
+    const base = deriveBaseErc4337ReceiveAddress(seed);
+    const bsc = deriveBscErc4337ReceiveAddress(seed);
+
+    log.info("api", "GET /api/wallet/deposit-rails", {
+      arbPrefix: arb.safeAddress.slice(0, 10),
+      basePrefix: base.safeAddress.slice(0, 10),
+      bscPrefix: bsc.safeAddress.slice(0, 10),
+    });
+
+    return res.json({
+      configured: true,
+      bitcoinOnchain,
+      lightning: {
+        label: "Lightning Network",
+        summary: "Bolt11 funding invoice → operator wallet → Boltz LN→USDT (Arbitrum).",
+      },
+      arbitrumUsdt: {
+        chainId: arb.chainId,
+        safeAddress: arb.safeAddress,
+        ownerAddress: arb.ownerAddress,
+        token: "USDT",
+        role: "Boltz receive; LiFi USDT → Base IDRX for BCA bank path.",
+      },
+      baseCbbtc: {
+        chainId: base.chainId,
+        safeAddress: base.safeAddress,
+        ownerAddress: base.ownerAddress,
+        token: "cbBTC",
+        contractAddress: LIFI_CBTC_BASE,
+        decimals: 8,
+        role: "Send cbBTC on Base to this Safe; LiFi swap to IDRX then burn/redeem.",
+        swapApi: "POST /api/swap/cbbtc-to-idrx",
+      },
+      bscBtcb: {
+        chainId: bsc.chainId,
+        safeAddress: bsc.safeAddress,
+        ownerAddress: bsc.ownerAddress,
+        token: "BTCB",
+        contractAddress: LIFI_BTCB_BSC,
+        decimals: 18,
+        role: "Send BTCB on BNB Chain to this Safe; LiFi swap to Base IDRX then burn/redeem.",
+        swapApi: "POST /api/swap/btcb-to-idrx",
+        rpcNote: "Requires BNB_RPC_URL or BSC_RPC_URL + BSC bundler (BSC_BUNDLER_URL or PIMLICO_API_KEY) for execution.",
+      },
+    });
+  } catch (error) {
+    log.error("api", "GET /api/wallet/deposit-rails failed", error);
+    return res.status(500).json({
+      error: error instanceof Error ? error.message : "Failed to build deposit rails",
+    });
+  }
+});
+
+app.post("/api/swap/cbbtc-to-idrx", async (req, res) => {
+  try {
+    const walletAddress = String(req.body.walletAddress || "").trim();
+    if (!walletAddress) {
+      return res.status(400).json({ error: "walletAddress is required (Base ERC-4337 Safe)" });
+    }
+    const result = await executeCbbtcToIdrxOnBase({
+      walletAddress,
+      cbbtcAmount:
+        req.body.cbbtcAmount != null ? Number(req.body.cbbtcAmount) : undefined,
+      fromAmountMinUnits:
+        req.body.fromAmountMinUnits != null
+          ? String(req.body.fromAmountMinUnits)
+          : undefined,
+    });
+    return res.json(result);
+  } catch (error) {
+    log.error("api", "POST /api/swap/cbbtc-to-idrx failed", error);
+    return res.status(500).json({
+      error: error instanceof Error ? error.message : "cbBTC→IDRX swap failed",
+    });
+  }
+});
+
+app.post("/api/swap/btcb-to-idrx", async (req, res) => {
+  try {
+    const walletAddress = String(req.body.walletAddress || "").trim();
+    if (!walletAddress) {
+      return res.status(400).json({ error: "walletAddress is required (BNB ERC-4337 Safe)" });
+    }
+    const result = await executeBtcbToIdrxFromBsc({
+      walletAddress,
+      btcbAmount:
+        req.body.btcbAmount != null ? Number(req.body.btcbAmount) : undefined,
+      fromAmountMinUnits:
+        req.body.fromAmountMinUnits != null
+          ? String(req.body.fromAmountMinUnits)
+          : undefined,
+    });
+    return res.json(result);
+  } catch (error) {
+    log.error("api", "POST /api/swap/btcb-to-idrx failed", error);
+    return res.status(500).json({
+      error: error instanceof Error ? error.message : "BTCB→IDRX swap failed",
+    });
   }
 });
 

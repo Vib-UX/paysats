@@ -14,7 +14,7 @@ const STEPS = [
   {
     step: "3",
     title: "We route the rails",
-    body: "Liquidity moves LN → USDT (Boltz) → Base: USDC + p2p.me for GoPay, or IDRX via LiFi for BCA bank — then IDRX burn/redeem to IDR."
+    body: "Lightning: LN → USDT (Boltz) → Base. You can also fund with Bitcoin on-chain (WDK Spark deposits), or send cbBTC / BTCB to our ERC-4337 Safes — LiFi moves that liquidity to Base IDRX, then IDRX burn/redeem to IDR (BCA) or USDC + p2p.me for GoPay."
   },
   {
     step: "4",

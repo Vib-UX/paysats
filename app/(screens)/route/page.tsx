@@ -7,6 +7,19 @@ import { InvoiceQrDisplay } from "@/components/wallet/invoice-qr-display";
 import { Button } from "@/components/ui/button";
 import { backendFetch } from "@/lib/backend-fetch";
 
+type DepositRailsResponse = {
+  configured?: boolean;
+  bitcoinOnchain?: {
+    label: string;
+    summary: string;
+    wdkDocsUrl: string;
+    apiMethods: string[];
+  };
+  baseCbbtc?: { safeAddress: string; contractAddress: string; chainId: number };
+  bscBtcb?: { safeAddress: string; contractAddress: string; chainId: number };
+  arbitrumUsdt?: { safeAddress: string; chainId: number };
+};
+
 type WebLnProvider = {
   enable: () => Promise<void>;
   sendPayment: (bolt11: string) => Promise<{ preimage?: string }>;
@@ -23,6 +36,7 @@ function RoutePage() {
   const [balanceMsat, setBalanceMsat] = useState<number | null>(null);
   const [walletAlias, setWalletAlias] = useState<string | null>(null);
   const [arbitrumSafe, setArbitrumSafe] = useState<string | null>(null);
+  const [depositRails, setDepositRails] = useState<DepositRailsResponse | null>(null);
 
   const merchant = searchParams.get("merchant") || "Unknown Merchant";
   const idrAmount = Number(searchParams.get("amount") || 0);
@@ -36,6 +50,10 @@ function RoutePage() {
         if (typeof data.safeAddress === "string") setArbitrumSafe(data.safeAddress);
       })
       .catch(() => {});
+    backendFetch("/api/wallet/deposit-rails")
+      .then((r) => r.json())
+      .then((data: DepositRailsResponse) => setDepositRails(data))
+      .catch(() => setDepositRails(null));
   }, []);
 
   async function fundViaWebln(invoice: string): Promise<void> {
@@ -112,6 +130,40 @@ function RoutePage() {
     <main className="app-shell">
       <h1 className="mb-2 text-2xl font-black text-gold">Review Route</h1>
       <p className="mb-6 text-sm text-zinc-300">Confirm fees, fund the route wallet, then start the swap.</p>
+      {depositRails?.bitcoinOnchain ? (
+        <section className="mb-6 rounded-2xl border border-border bg-card/60 p-4 text-sm text-zinc-400">
+          <h2 className="font-bold text-zinc-200">Receive options (settlement → IDRX burn)</h2>
+          <p className="mt-2 leading-relaxed">
+            <span className="font-medium text-zinc-300">Bitcoin (raw on-chain):</span>{" "}
+            {depositRails.bitcoinOnchain.summary}{" "}
+            <a
+              href={depositRails.bitcoinOnchain.wdkDocsUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-gold underline underline-offset-2"
+            >
+              WDK Spark deposits & withdrawals
+            </a>
+            .
+          </p>
+          {depositRails.baseCbbtc ? (
+            <p className="mt-2 break-all leading-relaxed">
+              <span className="font-medium text-zinc-300">cbBTC (Base):</span> send to Safe{" "}
+              <code className="text-xs text-zinc-500">{depositRails.baseCbbtc.safeAddress}</code> — token{" "}
+              <code className="text-xs text-zinc-500">{depositRails.baseCbbtc.contractAddress}</code> (chain{" "}
+              {depositRails.baseCbbtc.chainId}). Operator runs LiFi → IDRX on Base, then burn/redeem.
+            </p>
+          ) : null}
+          {depositRails.bscBtcb ? (
+            <p className="mt-2 break-all leading-relaxed">
+              <span className="font-medium text-zinc-300">BTCB (BNB Chain):</span> send to Safe{" "}
+              <code className="text-xs text-zinc-500">{depositRails.bscBtcb.safeAddress}</code> — token{" "}
+              <code className="text-xs text-zinc-500">{depositRails.bscBtcb.contractAddress}</code> (chain{" "}
+              {depositRails.bscBtcb.chainId}). LiFi routes to Base IDRX, then burn/redeem.
+            </p>
+          ) : null}
+        </section>
+      ) : null}
       {arbitrumSafe ? (
         <p className="mb-4 break-all text-xs text-zinc-500">
           Boltz USDT receive (Arbitrum, WDK ERC-4337 Safe): {arbitrumSafe}

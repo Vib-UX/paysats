@@ -4,6 +4,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { InvoiceQrDisplay } from "@/components/wallet/invoice-qr-display";
+import {
+  EvmDepositQrDisplay,
+  type EvmDepositInfo,
+} from "@/components/wallet/evm-deposit-qr-display";
 import { OfframpRouteExpandable } from "@/components/order/offramp-route-expandable";
 import { GiftCardsSection } from "@/components/gift-cards-section";
 import { HowItWorks } from "@/components/how-it-works";
@@ -54,6 +58,8 @@ function buildValidatePaymentProofUrl(
 }
 
 type PayoutMethod = "bank_transfer" | "gopay";
+/** Single control for POST /api/offramp/create `depositChannel`. */
+type FundingSource = "lightning" | "cbbtc" | "btcb";
 type WebLnProvider = {
   enable: () => Promise<void>;
   sendPayment: (bolt11: string) => Promise<{ preimage?: string }>;
@@ -122,6 +128,8 @@ export default function OfframpPage() {
   const [loadingPay, setLoadingPay] = useState(false);
   const [error, setError] = useState("");
   const [bolt11, setBolt11] = useState<string | null>(null);
+  const [depositInfo, setDepositInfo] = useState<EvmDepositInfo | null>(null);
+  const [fundingSource, setFundingSource] = useState<FundingSource>("lightning");
   const [orderId, setOrderId] = useState<string | null>(null);
   const [invoiceOpen, setInvoiceOpen] = useState(false);
   const [invoicePaying, setInvoicePaying] = useState(false);
@@ -243,6 +251,7 @@ export default function OfframpPage() {
     setError("");
     setLoadingPay(true);
     setBolt11(null);
+    setDepositInfo(null);
     setOrderId(null);
     setOrderDetail(null);
     setLightningPaymentPreimage(null);
@@ -260,11 +269,13 @@ export default function OfframpPage() {
               idrAmount: idrNum,
               payoutMethod,
               recipientDetails: recipientNormalized,
+              depositChannel: fundingSource,
             }
           : {
               satAmount: satsNum,
               payoutMethod,
               recipientDetails: recipientNormalized,
+              depositChannel: fundingSource,
             };
 
       const res = await backendFetch("/api/offramp/create", {
@@ -274,7 +285,13 @@ export default function OfframpPage() {
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Failed to create invoice.");
-      setBolt11(String(data.bolt11));
+      if (data.bolt11) {
+        setBolt11(String(data.bolt11));
+        setDepositInfo(null);
+      } else {
+        setBolt11(null);
+        setDepositInfo(data.deposit && typeof data.deposit === "object" ? (data.deposit as EvmDepositInfo) : null);
+      }
       setOrderId(String(data.orderId));
       setInvoiceOpen(true);
     } catch (e) {
@@ -358,7 +375,7 @@ export default function OfframpPage() {
 
   /** Merge live bolt11, WebLN preimage, and form payout hints until API snapshot catches up. */
   const routeOrder: OfframpOrderFields | null = useMemo(() => {
-    if (!orderDetail && !bolt11) return null;
+    if (!orderDetail && !bolt11 && !depositInfo) return null;
     const base =
       orderDetail ?? ({ state: "ROUTE_SHOWN" } as OfframpOrderFields);
     return {
@@ -368,10 +385,16 @@ export default function OfframpPage() {
         lightningPaymentPreimage?.trim() || base.invoiceLnPreimage || undefined,
       p2pmPayoutMethod: base.p2pmPayoutMethod || payoutMethod,
       payoutRecipient: base.payoutRecipient || recipientNormalized || undefined,
+      depositChannel: base.depositChannel ?? depositInfo?.channel ?? undefined,
+      depositChainId: base.depositChainId ?? depositInfo?.chainId ?? undefined,
+      depositTokenAddress:
+        base.depositTokenAddress ?? depositInfo?.tokenAddress ?? undefined,
+      depositToAddress: base.depositToAddress ?? depositInfo?.toAddress ?? undefined,
     };
   }, [
     orderDetail,
     bolt11,
+    depositInfo,
     lightningPaymentPreimage,
     payoutMethod,
     recipientNormalized,
@@ -510,6 +533,43 @@ export default function OfframpPage() {
                   </svg>
                 </button>
               </div>
+            </div>
+
+            <div className="mt-5 rounded-xl border border-border bg-black/15 p-3">
+              <label
+                htmlFor="offramp-funding-source"
+                className="text-xs font-medium text-zinc-500"
+              >
+                Pay with
+              </label>
+              <select
+                id="offramp-funding-source"
+                value={fundingSource}
+                onChange={(e) =>
+                  setFundingSource(e.target.value as FundingSource)
+                }
+                className="tap-target mt-2 w-full appearance-none rounded-xl border border-border bg-card px-4 py-3 text-sm font-bold text-white outline-none focus:border-gold"
+                style={{
+                  backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 24 24' stroke='%23a1a1aa'%3E%3Cpath stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='M19 9l-7 7-7-7'/%3E%3C/svg%3E")`,
+                  backgroundRepeat: "no-repeat",
+                  backgroundPosition: "right 0.75rem center",
+                  backgroundSize: "1.25rem",
+                  paddingRight: "2.5rem",
+                }}
+              >
+                <option value="lightning">
+                  Bitcoin / Lightning — LN invoice (Boltz → USDT)
+                </option>
+                <option value="cbbtc">cbBTC on Base — send to WDK Safe</option>
+                <option value="btcb">BTCB on BNB Chain — send to WDK Safe</option>
+              </select>
+              <p className="mt-2 text-[11px] leading-relaxed text-zinc-500">
+                {fundingSource === "lightning"
+                  ? "LN invoice QR on the next step."
+                  : fundingSource === "cbbtc"
+                    ? "On-chain QR (Base cbBTC → Safe)."
+                    : "On-chain QR (BNB BTCB → Safe)."}
+              </p>
             </div>
 
             <div className="mt-6 flex flex-col items-center justify-center gap-2">
@@ -725,7 +785,7 @@ export default function OfframpPage() {
         </footer>
       ) : null}
 
-      {invoiceOpen && bolt11 ? (
+      {invoiceOpen && (bolt11 || depositInfo) ? (
         <div
           role="dialog"
           aria-modal="true"
@@ -734,7 +794,9 @@ export default function OfframpPage() {
           <div className="w-full max-w-md space-y-4 rounded-2xl border border-border bg-zinc-950 p-4 shadow-2xl">
             <div className="flex items-center justify-between">
               <p className="text-sm font-bold text-zinc-200">
-                Pay with Lightning
+                {depositInfo
+                  ? `Deposit ${depositInfo.tokenSymbol} (${depositInfo.chainName})`
+                  : "Pay with Lightning"}
               </p>
               <button
                 type="button"
@@ -778,7 +840,7 @@ export default function OfframpPage() {
                   </a>
                 ) : null}
               </div>
-            ) : fundingSettled ? (
+            ) : fundingSettled && bolt11?.startsWith("ln") ? (
               showPaymentSuccess ? (
                 <div className="space-y-5 py-6 text-center">
                   <div
@@ -919,7 +981,7 @@ export default function OfframpPage() {
                   ) : null}
                 </div>
               )
-            ) : (
+            ) : bolt11?.startsWith("ln") ? (
               <>
                 <InvoiceQrDisplay
                   bolt11={bolt11}
@@ -994,6 +1056,40 @@ export default function OfframpPage() {
                   ) : null}
                 </div>
               </>
+            ) : depositInfo ? (
+              <>
+                <EvmDepositQrDisplay
+                  deposit={depositInfo}
+                  satAmount={satsNum > 0 ? satsNum : undefined}
+                  idrAmount={idrNum > 0 ? idrNum : undefined}
+                />
+                <div className="space-y-2">
+                  {orderId ? (
+                    <Button
+                      type="button"
+                      onClick={() =>
+                        router.push(
+                          `/status?orderId=${encodeURIComponent(orderId)}`,
+                        )
+                      }
+                      className="gold-gradient"
+                    >
+                      View status
+                    </Button>
+                  ) : null}
+                  <p className="text-center text-xs text-zinc-500">
+                    After your on-chain deposit confirms, the operator route runs
+                    LiFi → Base IDRX, then burn/redeem to your payout destination.
+                  </p>
+                  {routeOrder ? (
+                    <OfframpRouteExpandable order={routeOrder} defaultOpen />
+                  ) : null}
+                </div>
+              </>
+            ) : (
+              <p className="text-center text-sm text-red-400">
+                Missing deposit instructions. Close and try again.
+              </p>
             )}
           </div>
         </div>
