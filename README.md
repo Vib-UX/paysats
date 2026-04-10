@@ -85,7 +85,9 @@ flowchart LR
 
 ## Transaction details & outputs
 
-- **Boltz beta flow (Lightning invoice)** — add screenshots from a successful beta run here (invoice screen + paid state).
+- **Boltz beta flow (Lightning invoice)**
+<img width="2010" height="1024" alt="image" src="https://github.com/user-attachments/assets/978f7297-4751-4554-8063-848b4c0b3a3d" />
+
 
 - **TWDK ERC-4337** — user operations for LiFi and IDRX legs are executed via Pimlico-style bundlers (see `backend/.env.example`).
 
