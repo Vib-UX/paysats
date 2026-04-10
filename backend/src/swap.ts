@@ -1,5 +1,6 @@
 /**
- * Arbitrum USDT → Base destination token via LiFi + Tether WDK ERC-4337.
+ * EVM token → Base destination token via LiFi + Tether WDK ERC-4337.
+ * Paths: Arbitrum USDT, Base cbBTC, BNB Chain BTCB → Base IDRX (then IDRX burn / redeem).
  */
 import { WalletAccountEvmErc4337 } from "@tetherto/wdk-wallet-evm-erc-4337";
 import type { EvmErc4337WalletConfig } from "@tetherto/wdk-wallet-evm-erc-4337";
@@ -7,11 +8,19 @@ import {
   DEFAULT_WDK_EVM_PATH_SUFFIX,
   deriveArbitrumErc4337ReceiveAddress,
 } from "./arbitrumErc4337Address.js";
+import { deriveBaseErc4337ReceiveAddress } from "./baseErc4337Address.js";
+import { deriveBscErc4337ReceiveAddress } from "./bscErc4337Address.js";
 import {
-  fetchLifiQuote,
+  fetchLifiQuoteCrossChain,
+  LIFI_BTCB_BSC,
+  LIFI_CBTC_BASE,
+  LIFI_CHAIN_ARBITRUM,
+  LIFI_CHAIN_BASE,
+  LIFI_CHAIN_BSC,
   LIFI_IDRX_BASE,
-  LIFI_USDT_ARBITRUM,
   LIFI_USDC_BASE,
+  LIFI_USDT_ARBITRUM,
+  LIFI_USDT_BSC,
 } from "./lifiQuote.js";
 import { readIdrxDecimalsOnBase } from "./idrxBurn.js";
 import { idrxBaseRecipientAddress } from "./idrxConfig.js";
@@ -80,7 +89,7 @@ function resolveEntryPointContractAddress(): string {
   return process.env.ENTRY_POINT_ADDRESS?.trim() || ENTRY_POINT_V07;
 }
 
-function build4337Config(): EvmErc4337WalletConfig {
+function buildArbitrum4337Config(): EvmErc4337WalletConfig {
   const provider = process.env.ARBITRUM_RPC_URL?.trim();
   if (!provider)
     throw new Error("ARBITRUM_RPC_URL is required for WDK+LiFi swap");
@@ -106,6 +115,111 @@ function build4337Config(): EvmErc4337WalletConfig {
   return base as EvmErc4337WalletConfig;
 }
 
+function resolveBaseBundlerUrl(): string {
+  const explicit = process.env.BASE_BUNDLER_URL?.trim();
+  if (explicit) return explicit;
+  const pimlico = process.env.PIMLICO_API_KEY?.trim();
+  if (pimlico) {
+    return `https://api.pimlico.io/v2/8453/rpc?apikey=${encodeURIComponent(pimlico)}`;
+  }
+  throw new Error(
+    "Set BASE_BUNDLER_URL or PIMLICO_API_KEY for Base ERC-4337 LiFi swap",
+  );
+}
+
+function resolveBasePaymasterUrl(): string {
+  const explicit = process.env.BASE_PAYMASTER_URL?.trim();
+  if (explicit) return explicit;
+  return resolveBaseBundlerUrl();
+}
+
+function resolveBasePaymasterAddress(): string {
+  return (
+    process.env.BASE_PAYMASTER_ADDRESS?.trim() || PIMLICO_ERC20_PAYMASTER_V07
+  );
+}
+
+function buildBase4337Config(): EvmErc4337WalletConfig {
+  const provider = process.env.BASE_RPC_URL?.trim();
+  if (!provider) {
+    throw new Error("BASE_RPC_URL is required for Base ERC-4337 LiFi swap.");
+  }
+
+  const bundlerUrl = resolveBaseBundlerUrl();
+  const paymasterUrl = resolveBasePaymasterUrl();
+  const paymasterAddress = resolveBasePaymasterAddress();
+  const paymasterTokenAddress =
+    process.env.BASE_PAYMASTER_TOKEN_ADDRESS?.trim() || LIFI_USDC_BASE;
+  const entryPointAddress = resolveEntryPointContractAddress();
+
+  const base = {
+    chainId: 8453,
+    provider,
+    bundlerUrl,
+    safeModulesVersion: "0.3.0",
+    useNativeCoins: false as const,
+    paymasterUrl,
+    paymasterAddress,
+    paymasterToken: { address: paymasterTokenAddress },
+    entryPointAddress,
+  };
+  return base as EvmErc4337WalletConfig;
+}
+
+function resolveBscBundlerUrl(): string {
+  const explicit = process.env.BSC_BUNDLER_URL?.trim();
+  if (explicit) return explicit;
+  const pimlico = process.env.PIMLICO_API_KEY?.trim();
+  if (pimlico) {
+    return `https://api.pimlico.io/v2/56/rpc?apikey=${encodeURIComponent(pimlico)}`;
+  }
+  throw new Error(
+    "Set BSC_BUNDLER_URL or PIMLICO_API_KEY for BNB Chain ERC-4337 LiFi swap",
+  );
+}
+
+function resolveBscPaymasterUrl(): string {
+  const explicit = process.env.BSC_PAYMASTER_URL?.trim();
+  if (explicit) return explicit;
+  return resolveBscBundlerUrl();
+}
+
+function resolveBscPaymasterAddress(): string {
+  return (
+    process.env.BSC_PAYMASTER_ADDRESS?.trim() || PIMLICO_ERC20_PAYMASTER_V07
+  );
+}
+
+function buildBsc4337Config(): EvmErc4337WalletConfig {
+  const provider =
+    process.env.BNB_RPC_URL?.trim() || process.env.BSC_RPC_URL?.trim();
+  if (!provider) {
+    throw new Error(
+      "BNB_RPC_URL or BSC_RPC_URL is required for BNB Chain ERC-4337 LiFi swap.",
+    );
+  }
+
+  const bundlerUrl = resolveBscBundlerUrl();
+  const paymasterUrl = resolveBscPaymasterUrl();
+  const paymasterAddress = resolveBscPaymasterAddress();
+  const paymasterTokenAddress =
+    process.env.BSC_PAYMASTER_TOKEN_ADDRESS?.trim() || LIFI_USDT_BSC;
+  const entryPointAddress = resolveEntryPointContractAddress();
+
+  const base = {
+    chainId: 56,
+    provider,
+    bundlerUrl,
+    safeModulesVersion: "0.3.0",
+    useNativeCoins: false as const,
+    paymasterUrl,
+    paymasterAddress,
+    paymasterToken: { address: paymasterTokenAddress },
+    entryPointAddress,
+  };
+  return base as EvmErc4337WalletConfig;
+}
+
 function rawToHuman(
   estimateToAmount: string | undefined,
   decimals: number,
@@ -115,10 +229,13 @@ function rawToHuman(
   return Number(raw) / 10 ** decimals;
 }
 
-async function runLifiArbUsdtToBaseToken(params: {
-  usdtAmount: number;
-  /** Raw USDT amount in 6 decimals; overrides floor(usdtAmount * 1e6) when set. */
-  fromAmountMinUnits?: string;
+/**
+ * Generic LiFi: source chain ERC-20 → Base `toToken` (e.g. IDRX), executed on the source-chain Safe.
+ */
+async function runLifiEvmToBaseToken(params: {
+  lifiFromChain: string;
+  fromToken: string;
+  fromAmountMinUnits: string;
   walletAddress: string;
   toToken: string;
   toAddress: string;
@@ -126,16 +243,15 @@ async function runLifiArbUsdtToBaseToken(params: {
   maxDestHuman: number;
   minDestHuman?: number;
   logLabel: string;
+  build4337Config: () => EvmErc4337WalletConfig;
+  expectedSafeFromSeed: (seed: string) => string;
 }): Promise<{
   destAmountHuman: number;
   destAmountMinRaw: string;
   txHash: string;
 }> {
-  if (params.usdtAmount <= 0) {
-    throw new Error("USDT amount must be greater than zero.");
-  }
   if (!params.walletAddress?.trim()) {
-    throw new Error("Missing wallet address for USDT -> destination swap.");
+    throw new Error("Missing wallet address for LiFi swap.");
   }
 
   const apiKey = process.env.LIFI_API_KEY?.trim();
@@ -148,23 +264,27 @@ async function runLifiArbUsdtToBaseToken(params: {
     throw new Error("WDK_SEED is not set; cannot execute ERC-4337 swap.");
   }
 
-  const { safeAddress } = deriveArbitrumErc4337ReceiveAddress(seed);
+  const safeAddress = params.expectedSafeFromSeed(seed);
   if (safeAddress.toLowerCase() !== params.walletAddress.trim().toLowerCase()) {
     throw new Error(
-      `walletAddress must match WDK Safe on Arbitrum (expected ${safeAddress}, got ${params.walletAddress})`,
+      `walletAddress must match WDK Safe for this chain (expected ${safeAddress}, got ${params.walletAddress})`,
     );
   }
 
-  const fromAmount =
-    params.fromAmountMinUnits?.trim() ||
-    String(Math.max(1, Math.floor(params.usdtAmount * 1e6)));
+  const fromAmount = params.fromAmountMinUnits.trim();
+  if (!fromAmount || BigInt(fromAmount) <= 0n) {
+    throw new Error("fromAmountMinUnits must be a positive integer string.");
+  }
 
-  const quote = await fetchLifiQuote({
+  const quote = await fetchLifiQuoteCrossChain({
     apiKey,
+    fromChain: params.lifiFromChain,
+    toChain: LIFI_CHAIN_BASE,
+    fromToken: params.fromToken,
+    toToken: params.toToken,
     fromAddress: safeAddress,
     toAddress: params.toAddress,
     fromAmount,
-    toToken: params.toToken,
     slippage: process.env.LIFI_SLIPPAGE?.trim() || "0.03",
   });
 
@@ -193,7 +313,7 @@ async function runLifiArbUsdtToBaseToken(params: {
   const wallet = new WalletAccountEvmErc4337(
     seed,
     DEFAULT_WDK_EVM_PATH_SUFFIX,
-    build4337Config(),
+    params.build4337Config(),
   );
 
   const safeFromWallet = await wallet.getAddress();
@@ -204,10 +324,10 @@ async function runLifiArbUsdtToBaseToken(params: {
   }
 
   const need = BigInt(fromAmount);
-  const usdtRaw = await wallet.getTokenBalance(LIFI_USDT_ARBITRUM);
-  if (BigInt(usdtRaw) < need) {
+  const balanceRaw = await wallet.getTokenBalance(params.fromToken);
+  if (BigInt(balanceRaw) < need) {
     throw new Error(
-      `Insufficient USDT on Safe: have ${usdtRaw}, need at least ${need} (min units ${fromAmount}); keep extra for paymaster gas`,
+      `Insufficient token on Safe: have ${balanceRaw}, need at least ${need} (min units ${fromAmount}); keep extra for paymaster gas`,
     );
   }
 
@@ -229,18 +349,18 @@ async function runLifiArbUsdtToBaseToken(params: {
   });
 
   const allowance = await wallet.getAllowance(
-    LIFI_USDT_ARBITRUM,
+    params.fromToken,
     approvalAddress,
   );
   const needForSwap = BigInt(fromAmt ?? fromAmount);
 
   if (allowance < needForSwap) {
-    log.info("swap", "approving USDT for LiFi spender", {
+    log.info("swap", "approving token for LiFi spender", {
       current: allowance.toString(),
       need: needForSwap.toString(),
     });
     const { hash } = await wallet.approve({
-      token: LIFI_USDT_ARBITRUM,
+      token: params.fromToken,
       spender: approvalAddress,
       amount: needForSwap,
     });
@@ -274,6 +394,46 @@ async function runLifiArbUsdtToBaseToken(params: {
     destAmountMinRaw,
     txHash: swapHash,
   };
+}
+
+async function runLifiArbUsdtToBaseToken(params: {
+  usdtAmount: number;
+  /** Raw USDT amount in 6 decimals; overrides floor(usdtAmount * 1e6) when set. */
+  fromAmountMinUnits?: string;
+  walletAddress: string;
+  toToken: string;
+  toAddress: string;
+  destDecimals: number;
+  maxDestHuman: number;
+  minDestHuman?: number;
+  logLabel: string;
+}): Promise<{
+  destAmountHuman: number;
+  destAmountMinRaw: string;
+  txHash: string;
+}> {
+  if (params.usdtAmount <= 0) {
+    throw new Error("USDT amount must be greater than zero.");
+  }
+
+  const fromAmount =
+    params.fromAmountMinUnits?.trim() ||
+    String(Math.max(1, Math.floor(params.usdtAmount * 1e6)));
+
+  return runLifiEvmToBaseToken({
+    lifiFromChain: LIFI_CHAIN_ARBITRUM,
+    fromToken: LIFI_USDT_ARBITRUM,
+    fromAmountMinUnits: fromAmount,
+    walletAddress: params.walletAddress,
+    toToken: params.toToken,
+    toAddress: params.toAddress,
+    destDecimals: params.destDecimals,
+    maxDestHuman: params.maxDestHuman,
+    minDestHuman: params.minDestHuman,
+    logLabel: params.logLabel,
+    build4337Config: buildArbitrum4337Config,
+    expectedSafeFromSeed: (s) => deriveArbitrumErc4337ReceiveAddress(s).safeAddress,
+  });
 }
 
 export async function executeUsdtToUsdcSwap(params: {
@@ -333,6 +493,100 @@ export async function executeUsdtToIdrxOnBase(params: {
     maxDestHuman: IDRX_MAX_ORDER_IDR,
     minDestHuman: IDRX_MIN_REDEEM_IDR,
     logLabel: "USDT→IDRX(Base)",
+  });
+
+  return {
+    idrxAmountIdr: r.destAmountHuman,
+    idrxAmountMinRaw: r.destAmountMinRaw,
+    txHash: r.txHash,
+  };
+}
+
+/** cbBTC on Base → Base IDRX via LiFi (same-chain or routed); Safe must hold cbBTC + USDC for gas. */
+export async function executeCbbtcToIdrxOnBase(params: {
+  walletAddress: string;
+  /** Whole BTC units (cbBTC, 8 decimals). */
+  cbbtcAmount?: number;
+  /** Raw amount in smallest units (8 decimals); overrides cbbtcAmount when set. */
+  fromAmountMinUnits?: string;
+}): Promise<{
+  idrxAmountIdr: number;
+  idrxAmountMinRaw: string;
+  txHash: string;
+}> {
+  const decimals = await readIdrxDecimalsOnBase();
+  const toAddress = idrxBaseRecipientAddress();
+
+  const fromAmount =
+    params.fromAmountMinUnits?.trim() ||
+    (params.cbbtcAmount != null && params.cbbtcAmount > 0
+      ? String(Math.max(1, Math.floor(params.cbbtcAmount * 1e8)))
+      : "");
+  if (!fromAmount) {
+    throw new Error("Set cbbtcAmount or fromAmountMinUnits (cbBTC, 8 decimals).");
+  }
+
+  const r = await runLifiEvmToBaseToken({
+    lifiFromChain: LIFI_CHAIN_BASE,
+    fromToken: LIFI_CBTC_BASE,
+    fromAmountMinUnits: fromAmount,
+    walletAddress: params.walletAddress,
+    toToken: LIFI_IDRX_BASE,
+    toAddress,
+    destDecimals: decimals,
+    maxDestHuman: IDRX_MAX_ORDER_IDR,
+    minDestHuman: IDRX_MIN_REDEEM_IDR,
+    logLabel: "cbBTC→IDRX(Base)",
+    build4337Config: buildBase4337Config,
+    expectedSafeFromSeed: (s) => deriveBaseErc4337ReceiveAddress(s).safeAddress,
+  });
+
+  return {
+    idrxAmountIdr: r.destAmountHuman,
+    idrxAmountMinRaw: r.destAmountMinRaw,
+    txHash: r.txHash,
+  };
+}
+
+/** BTCB on BNB Chain → Base IDRX via LiFi; Safe must hold BTCB + BSC USDT for gas. */
+export async function executeBtcbToIdrxFromBsc(params: {
+  walletAddress: string;
+  /** Whole BTC units (BTCB uses 18 decimals on BSC). */
+  btcbAmount?: number;
+  fromAmountMinUnits?: string;
+}): Promise<{
+  idrxAmountIdr: number;
+  idrxAmountMinRaw: string;
+  txHash: string;
+}> {
+  const decimals = await readIdrxDecimalsOnBase();
+  const toAddress = idrxBaseRecipientAddress();
+
+  const fromAmount =
+    params.fromAmountMinUnits?.trim() ||
+    (params.btcbAmount != null && params.btcbAmount > 0
+      ? (() => {
+          const raw = BigInt(Math.floor(params.btcbAmount * 1e18));
+          return (raw < 1n ? "1" : raw.toString());
+        })()
+      : "");
+  if (!fromAmount) {
+    throw new Error("Set btcbAmount or fromAmountMinUnits (BTCB, 18 decimals).");
+  }
+
+  const r = await runLifiEvmToBaseToken({
+    lifiFromChain: LIFI_CHAIN_BSC,
+    fromToken: LIFI_BTCB_BSC,
+    fromAmountMinUnits: fromAmount,
+    walletAddress: params.walletAddress,
+    toToken: LIFI_IDRX_BASE,
+    toAddress,
+    destDecimals: decimals,
+    maxDestHuman: IDRX_MAX_ORDER_IDR,
+    minDestHuman: IDRX_MIN_REDEEM_IDR,
+    logLabel: "BTCB→IDRX(BSC→Base)",
+    build4337Config: buildBsc4337Config,
+    expectedSafeFromSeed: (s) => deriveBscErc4337ReceiveAddress(s).safeAddress,
   });
 
   return {

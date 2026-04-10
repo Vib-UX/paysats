@@ -8,6 +8,11 @@ import { ORDER_STATES, type OrderState } from "@/lib/state";
 export type OfframpOrderFields = {
   state?: OrderState | string | null;
   satAmount?: number | null;
+  /** lightning | cbbtc | btcb */
+  depositChannel?: string | null;
+  depositChainId?: number | null;
+  depositTokenAddress?: string | null;
+  depositToAddress?: string | null;
   merchantName?: string | null;
   invoicePaidAt?: string | null;
   invoicePaymentHash?: string | null;
@@ -117,8 +122,171 @@ function payoutLabel(method: string | null | undefined): string {
   return "Bank / wallet";
 }
 
+function isWrappedDeposit(order: OfframpOrderFields): boolean {
+  const c = String(order.depositChannel || "").toLowerCase();
+  return c === "cbbtc" || c === "btcb";
+}
+
+/** Route when user funds via cbBTC (Base) or BTCB (BNB) instead of a Lightning invoice. */
+function buildWrappedDepositRouteHops(order: OfframpOrderFields): RouteHop[] {
+  const bankBca =
+    String(order.p2pmPayoutMethod || "").toLowerCase() === "bank_transfer";
+  const dc = String(order.depositChannel || "").toLowerCase();
+  const isCbbtc = dc === "cbbtc";
+  const tokenLabel = isCbbtc ? "cbBTC (Base)" : "BTCB (BNB Chain)";
+  const chainLabel = isCbbtc ? "Base (8453)" : "BNB Chain (56)";
+  const to = order.depositToAddress?.trim();
+  const token = order.depositTokenAddress?.trim();
+
+  const stateStr = String(order.state || "ROUTE_SHOWN");
+  const si = effectiveStateIndex(order, stateStr);
+  const routeShown = idx("ROUTE_SHOWN");
+  const failed = stateStr === "FAILED";
+
+  const hopStatus = (done: boolean, active: boolean): RouteHop["status"] => {
+    if (failed && !done) return "pending";
+    if (done) return "done";
+    if (active) return "active";
+    return "pending";
+  };
+
+  const swapTxReady = Boolean(order.swapTxHash?.trim());
+  const idrxBurnReady = Boolean(order.idrxBurnTxHash?.trim());
+  const idrxRedeemReady = Boolean(order.idrxRedeemId?.trim());
+  const tailMilestonesDone = !failed && (bankBca ? idrxRedeemReady : swapTxReady);
+  const tailMilestonesActive =
+    !failed &&
+    !tailMilestonesDone &&
+    (stateStr === "USDC_SWAPPED" ||
+      stateStr === "P2PM_ORDER_PLACED" ||
+      stateStr === "P2PM_ORDER_CONFIRMED" ||
+      stateStr === "IDR_SETTLED");
+
+  const depositLinks: RouteHopLink[] = [];
+  if (to && isCbbtc) {
+    depositLinks.push({
+      label: "Safe on Base (BaseScan)",
+      href: `https://basescan.org/address/${to}`,
+    });
+  } else if (to) {
+    depositLinks.push({
+      label: "Safe on BNB (BscScan)",
+      href: `https://bscscan.com/address/${to}`,
+    });
+  }
+  if (token) {
+    depositLinks.push({
+      label: isCbbtc ? "cbBTC token (BaseScan)" : "BTCB token (BscScan)",
+      href: isCbbtc
+        ? `https://basescan.org/token/${token}`
+        : `https://bscscan.com/token/${token}`,
+    });
+  }
+
+  const depositDone = swapTxReady;
+  const depositActive = !depositDone && si <= routeShown;
+
+  const hops: RouteHop[] = [];
+
+  hops.push({
+    id: "deposit-wrapped",
+    title: `Deposit ${tokenLabel}`,
+    description: depositDone
+      ? "On-chain deposit received; LiFi / settlement can proceed."
+      : `Send ${tokenLabel} on ${chainLabel} to the ERC-4337 Safe shown in the QR. Target matches your order size in IDR (≈ ${order.satAmount != null ? `${order.satAmount.toLocaleString()} sats` : "—"}). Operator runs LiFi → Base IDRX when funds are available.`,
+    status: hopStatus(depositDone, depositActive),
+    links: depositLinks,
+  });
+
+  const swapLinks: RouteHopLink[] = [];
+  if (order.swapTxHash) {
+    const h = order.swapTxHash.trim();
+    swapLinks.push({
+      label: bankBca ? "LiFi → Base IDRX (tx)" : "LiFi → Base USDC (tx)",
+      href: isCbbtc ? `https://basescan.org/tx/${h}` : `https://arbiscan.io/tx/${h}`,
+    });
+  }
+
+  const liFiDone = swapTxReady;
+  const liFiActive = !liFiDone && !failed;
+
+  hops.push({
+    id: "lifi-wrapped",
+    title: bankBca ? "LiFi: wrapped BTC → Base IDRX" : "LiFi: wrapped BTC → Base USDC",
+    description: liFiDone
+      ? bankBca
+        ? "Cross-chain swap to Base IDRX submitted for burn & redeem."
+        : "Cross-chain swap to Base USDC submitted for p2p.me."
+      : "Quoting LiFi, approving token, routing to Base after your deposit confirms.",
+    status: hopStatus(liFiDone, liFiActive),
+    links: swapLinks,
+  });
+
+  if (bankBca) {
+    const idrxLinks: RouteHopLink[] = [{ label: "IDRX redeem docs", href: IDRX_DOCS }];
+    if (order.idrxBurnTxHash?.trim()) {
+      idrxLinks.unshift({
+        label: "IDRX burn (Base)",
+        href: `${BASESCAN_TX}${order.idrxBurnTxHash.trim()}`,
+      });
+    }
+    hops.push({
+      id: "idrx-burn-redeem-w",
+      title: "IDRX burn & redeem (Base)",
+      description: idrxRedeemReady
+        ? `Burn confirmed; redeem request submitted (ref ${order.idrxRedeemId?.slice(0, 12) ?? "—"}…).`
+        : idrxBurnReady
+          ? "Burn on Base confirmed; submitting redeem-request…"
+          : swapTxReady
+            ? "Waiting for IDRX on Base, then burn and redeem to your BCA account."
+            : "After LiFi delivers IDRX on Base.",
+      status: hopStatus(idrxRedeemReady, swapTxReady && !idrxRedeemReady),
+      links: idrxLinks,
+    });
+  } else {
+    const p2pLinks: RouteHopLink[] = [{ label: "p2p.me app", href: P2P_APP }];
+    if (order.p2pmOrderId) {
+      p2pLinks.unshift({
+        label: `Order ref · ${order.p2pmOrderId.slice(0, 14)}…`,
+        href: `${P2P_APP}/sell`,
+      });
+    }
+    hops.push({
+      id: "p2p-w",
+      title: "p2p.me merchant (USDC → IDR)",
+      description: tailMilestonesDone
+        ? "USDC in place after LiFi."
+        : "Waiting for LiFi swap confirmation.",
+      status: hopStatus(tailMilestonesDone, tailMilestonesActive),
+      links: p2pLinks,
+    });
+  }
+
+  const mask = maskPayoutRecipient(order.p2pmPayoutMethod, order.payoutRecipient);
+  const pl = payoutLabel(order.p2pmPayoutMethod);
+  const idrN = order.idrAmount != null ? `Rp ${Number(order.idrAmount).toLocaleString("id-ID")}` : "IDR";
+
+  hops.push({
+    id: "fiat-settled-w",
+    title: bankBca ? `IDR settled · ${pl} (IDRX → IDR)` : `IDR settled · ${pl}`,
+    description: tailMilestonesDone
+      ? stateStr === "COMPLETED"
+        ? `Final payout complete. ${idrN} to ${pl} ${mask}.`
+        : `Payout in progress to ${pl} ${mask}.`
+      : `Destination: ${pl} ${mask}.`,
+    status: hopStatus(tailMilestonesDone, tailMilestonesActive),
+    links: [],
+  });
+
+  return hops;
+}
+
 export function buildOfframpRouteHops(order: OfframpOrderFields | null | undefined): RouteHop[] {
   if (!order) return [];
+
+  if (isWrappedDeposit(order)) {
+    return buildWrappedDepositRouteHops(order);
+  }
 
   const bankBca =
     String(order.p2pmPayoutMethod || "").toLowerCase() === "bank_transfer";
