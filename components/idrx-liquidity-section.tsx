@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { IdrxMark } from "@/components/idrx-mark";
+import { LiquidityPlatformBanner } from "@/components/liquidity-platform-banner";
 
 type IdrxPoolRow = {
   dexId: string;
@@ -75,7 +76,9 @@ export function IdrxLiquiditySection({ className = "" }: { className?: string })
 
   return (
     <div className={`space-y-5 ${className}`}>
-      <div>
+      <LiquidityPlatformBanner />
+
+      <div className="pt-4">
         <h2 className="text-lg font-black text-white">IDRX liquidity & volume</h2>
         <p className="mt-2 text-sm leading-relaxed text-zinc-400">
           Aggregated DEX pools where{" "}

@@ -3,6 +3,7 @@
 import { useState } from "react";
 import QRCode from "react-qr-code";
 import { Button } from "@/components/ui/button";
+import { formatSatsAsBtc } from "@/lib/format-sats-btc";
 
 export type EvmDepositInfo = {
   channel: string;
@@ -38,6 +39,12 @@ export function EvmDepositQrDisplay({ deposit, satAmount, idrAmount }: Props) {
         ? "https://bscscan.com"
         : null;
 
+  const ch = String(deposit.channel || "").toLowerCase();
+  const isWrappedBtcDeposit = ch === "cbbtc" || ch === "btcb";
+  const showAmountRow =
+    (idrAmount != null && idrAmount > 0) ||
+    (isWrappedBtcDeposit && satAmount != null && satAmount > 0);
+
   return (
     <div className="flex flex-col items-center gap-4 rounded-2xl border border-border bg-card p-4">
       <p className="text-center text-xs uppercase tracking-wide text-zinc-400">
@@ -46,10 +53,27 @@ export function EvmDepositQrDisplay({ deposit, satAmount, idrAmount }: Props) {
       <p className="text-center text-sm text-zinc-300">
         {deposit.chainName} · chain {deposit.chainId}
       </p>
-      {idrAmount != null && idrAmount > 0 ? (
+      {showAmountRow ? (
         <p className="text-center text-sm text-zinc-300">
-          Order ≈ Rp {idrAmount.toLocaleString("id-ID")}
-          {satAmount != null ? ` · ${satAmount.toLocaleString()} sats` : null}
+          {idrAmount != null && idrAmount > 0 ? (
+            <>Order ≈ Rp {idrAmount.toLocaleString("id-ID")}</>
+          ) : null}
+          {satAmount != null && satAmount > 0 ? (
+            <>
+              {idrAmount != null && idrAmount > 0 ? " · " : null}
+              {isWrappedBtcDeposit ? (
+                <>
+                  ≈ {formatSatsAsBtc(satAmount)} BTC
+                  <span className="text-zinc-500">
+                    {" "}
+                    ({satAmount.toLocaleString("id-ID")} sats)
+                  </span>
+                </>
+              ) : idrAmount != null && idrAmount > 0 ? (
+                <>{satAmount.toLocaleString("id-ID")} sats</>
+              ) : null}
+            </>
+          ) : null}
         </p>
       ) : null}
       <div className="rounded-xl bg-white p-3">

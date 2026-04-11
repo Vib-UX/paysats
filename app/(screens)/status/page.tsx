@@ -39,7 +39,7 @@ function StatusPage() {
     <main className="app-shell space-y-4">
       <h1 className="mb-3 text-2xl font-black text-white">Order status</h1>
       <ProgressBar state={state} />
-      <OfframpRouteExpandable order={order} defaultOpen />
+      <OfframpRouteExpandable order={order} />
       <OrderTimeline state={state} />
     </main>
   );

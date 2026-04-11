@@ -59,6 +59,7 @@ function StatusDot({ status }: { status: "pending" | "active" | "done" }) {
 export function OfframpRouteExpandable({ order, defaultOpen = false, className = "" }: Props) {
   const [open, setOpen] = useState(defaultOpen);
   const hops = useMemo(() => buildOfframpRouteHops(order), [order]);
+  const hopTrail = useMemo(() => hops.map((h) => h.title).join(" → "), [hops]);
 
   if (hops.length === 0) return null;
 
@@ -67,12 +68,20 @@ export function OfframpRouteExpandable({ order, defaultOpen = false, className =
       <button
         type="button"
         onClick={() => setOpen((o) => !o)}
-        className="flex w-full items-center justify-between gap-3 rounded-2xl px-4 py-3 text-left transition hover:bg-white/5"
+        className="flex w-full items-start justify-between gap-3 rounded-2xl px-4 py-3 text-left transition hover:bg-white/5"
         aria-expanded={open}
       >
-        <div>
+        <div className="min-w-0 flex-1">
           <p className="text-xs font-bold uppercase tracking-wide text-zinc-400">Route</p>
           <p className="text-sm font-bold text-zinc-100">Each hop & references</p>
+          {!open ? (
+            <p
+              className="mt-1.5 line-clamp-2 text-xs leading-snug text-zinc-500"
+              title={hopTrail}
+            >
+              {hopTrail}
+            </p>
+          ) : null}
         </div>
         <span
           className={`grid h-9 w-9 shrink-0 place-items-center rounded-xl border border-border text-zinc-300 transition ${open ? "rotate-180" : ""}`}

@@ -4,17 +4,16 @@
  *   npm run idrx:methods
  */
 import "dotenv/config";
+import { isIdrxEwalletBankCode } from "../src/idrxPayoutClassify.js";
 import { getIdrxTransactionMethods } from "../src/idrxRedeem.js";
-
-const EWALLET_HINTS = /GOPAY|OVO|DANA|SHOPEE|LINKAJA|IMKAS/i;
 
 async function main() {
   const out = await getIdrxTransactionMethods();
   const rows = out.data ?? [];
   console.log(JSON.stringify(out, null, 2));
-  const ew = rows.filter((r) => EWALLET_HINTS.test(r.bankName));
+  const ew = rows.filter((r) => isIdrxEwalletBankCode(r.bankCode));
   if (ew.length) {
-    console.log("\n--- E-wallet / GoPay–style (name heuristic) ---");
+    console.log("\n--- E-wallets (bankCode allowlist) ---");
     console.log(JSON.stringify(ew, null, 2));
   }
 }

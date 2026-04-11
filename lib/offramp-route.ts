@@ -1,8 +1,10 @@
 /**
  * Build expandable “route” hops for the offramp pipeline.
- * Bank: LN → Boltz → LiFi (USDT→IDRX Base) → burn/redeem → IDR.
- * GoPay: LN → Boltz → LiFi (USDT→USDC) → p2p.me → IDR.
+ * IDRX: LN → Boltz → LiFi (USDT→IDRX Base) → burn/redeem → IDR (bank or e-wallet rail).
+ * Legacy GoPay: LN → Boltz → LiFi (USDT→USDC) → p2p.me → IDR.
  */
+import { formatSatsAsBtc } from "@/lib/format-sats-btc";
+import { isIdrxEwalletBankCode } from "@/lib/idrx-payout-classify";
 import { ORDER_STATES, type OrderState } from "@/lib/state";
 
 export type OfframpOrderFields = {
@@ -28,6 +30,8 @@ export type OfframpOrderFields = {
   swapTxHash?: string | null;
   p2pmOrderId?: string | null;
   p2pmPayoutMethod?: string | null;
+  idrxPayoutBankCode?: string | null;
+  idrxPayoutBankName?: string | null;
   payoutRecipient?: string | null;
   /** BCA holder name for IDRX redeem-request (bank_transfer). */
   bankAccountName?: string | null;
@@ -102,10 +106,14 @@ function effectiveStateIndex(order: OfframpOrderFields, stateStr: string): numbe
 export function maskPayoutRecipient(
   method: string | null | undefined,
   raw: string | null | undefined,
+  idrxPayoutBankCode?: string | null,
 ): string {
   if (!raw) return "—";
   const mth = (method || "").toLowerCase();
-  if (mth === "gopay") {
+  const ewallet =
+    mth === "gopay" ||
+    (idrxPayoutBankCode ? isIdrxEwalletBankCode(idrxPayoutBankCode) : false);
+  if (ewallet) {
     const m = raw.trim().match(/^(\+\d{1,3}-)(\d+)$/);
     if (m && m[2].length >= 4) return `${m[1]}···${m[2].slice(-4)}`;
     return "···";
@@ -122,6 +130,17 @@ function payoutLabel(method: string | null | undefined): string {
   return "Bank / wallet";
 }
 
+function payoutLabelFromOrder(order: OfframpOrderFields): string {
+  const n = order.idrxPayoutBankName?.trim();
+  if (n) return n;
+  return payoutLabel(order.p2pmPayoutMethod);
+}
+
+/** false only for legacy p2p.me GoPay orders (no IDRX rail). */
+function usesIdrxRedeemPath(order: OfframpOrderFields): boolean {
+  return String(order.p2pmPayoutMethod || "").toLowerCase() !== "gopay";
+}
+
 function isWrappedDeposit(order: OfframpOrderFields): boolean {
   const c = String(order.depositChannel || "").toLowerCase();
   return c === "cbbtc" || c === "btcb";
@@ -129,8 +148,7 @@ function isWrappedDeposit(order: OfframpOrderFields): boolean {
 
 /** Route when user funds via cbBTC (Base) or BTCB (BNB) instead of a Lightning invoice. */
 function buildWrappedDepositRouteHops(order: OfframpOrderFields): RouteHop[] {
-  const bankBca =
-    String(order.p2pmPayoutMethod || "").toLowerCase() === "bank_transfer";
+  const idrxPath = usesIdrxRedeemPath(order);
   const dc = String(order.depositChannel || "").toLowerCase();
   const isCbbtc = dc === "cbbtc";
   const tokenLabel = isCbbtc ? "cbBTC (Base)" : "BTCB (BNB Chain)";
@@ -153,7 +171,7 @@ function buildWrappedDepositRouteHops(order: OfframpOrderFields): RouteHop[] {
   const swapTxReady = Boolean(order.swapTxHash?.trim());
   const idrxBurnReady = Boolean(order.idrxBurnTxHash?.trim());
   const idrxRedeemReady = Boolean(order.idrxRedeemId?.trim());
-  const tailMilestonesDone = !failed && (bankBca ? idrxRedeemReady : swapTxReady);
+  const tailMilestonesDone = !failed && (idrxPath ? idrxRedeemReady : swapTxReady);
   const tailMilestonesActive =
     !failed &&
     !tailMilestonesDone &&
@@ -193,7 +211,7 @@ function buildWrappedDepositRouteHops(order: OfframpOrderFields): RouteHop[] {
     title: `Deposit ${tokenLabel}`,
     description: depositDone
       ? "On-chain deposit received; LiFi / settlement can proceed."
-      : `Send ${tokenLabel} on ${chainLabel} to the ERC-4337 Safe shown in the QR. Target matches your order size in IDR (≈ ${order.satAmount != null ? `${order.satAmount.toLocaleString()} sats` : "—"}). Operator runs LiFi → Base IDRX when funds are available.`,
+      : `Send ${tokenLabel} on ${chainLabel} to the ERC-4337 Safe shown in the QR. Target matches your order size in IDR (≈ ${order.satAmount != null ? `${formatSatsAsBtc(order.satAmount)} BTC` : "—"}). Operator runs LiFi → Base IDRX when funds are available.`,
     status: hopStatus(depositDone, depositActive),
     links: depositLinks,
   });
@@ -202,7 +220,7 @@ function buildWrappedDepositRouteHops(order: OfframpOrderFields): RouteHop[] {
   if (order.swapTxHash) {
     const h = order.swapTxHash.trim();
     swapLinks.push({
-      label: bankBca ? "LiFi → Base IDRX (tx)" : "LiFi → Base USDC (tx)",
+      label: idrxPath ? "LiFi → Base IDRX (tx)" : "LiFi → Base USDC (tx)",
       href: isCbbtc ? `https://basescan.org/tx/${h}` : `https://arbiscan.io/tx/${h}`,
     });
   }
@@ -212,9 +230,9 @@ function buildWrappedDepositRouteHops(order: OfframpOrderFields): RouteHop[] {
 
   hops.push({
     id: "lifi-wrapped",
-    title: bankBca ? "LiFi: wrapped BTC → Base IDRX" : "LiFi: wrapped BTC → Base USDC",
+    title: idrxPath ? "LiFi: wrapped BTC → Base IDRX" : "LiFi: wrapped BTC → Base USDC",
     description: liFiDone
-      ? bankBca
+      ? idrxPath
         ? "Cross-chain swap to Base IDRX submitted for burn & redeem."
         : "Cross-chain swap to Base USDC submitted for p2p.me."
       : "Quoting LiFi, approving token, routing to Base after your deposit confirms.",
@@ -222,7 +240,7 @@ function buildWrappedDepositRouteHops(order: OfframpOrderFields): RouteHop[] {
     links: swapLinks,
   });
 
-  if (bankBca) {
+  if (idrxPath) {
     const idrxLinks: RouteHopLink[] = [{ label: "IDRX redeem docs", href: IDRX_DOCS }];
     if (order.idrxBurnTxHash?.trim()) {
       idrxLinks.unshift({
@@ -238,7 +256,7 @@ function buildWrappedDepositRouteHops(order: OfframpOrderFields): RouteHop[] {
         : idrxBurnReady
           ? "Burn on Base confirmed; submitting redeem-request…"
           : swapTxReady
-            ? "Waiting for IDRX on Base, then burn and redeem to your BCA account."
+            ? "Waiting for IDRX on Base, then burn and redeem to your payout account."
             : "After LiFi delivers IDRX on Base.",
       status: hopStatus(idrxRedeemReady, swapTxReady && !idrxRedeemReady),
       links: idrxLinks,
@@ -262,13 +280,17 @@ function buildWrappedDepositRouteHops(order: OfframpOrderFields): RouteHop[] {
     });
   }
 
-  const mask = maskPayoutRecipient(order.p2pmPayoutMethod, order.payoutRecipient);
-  const pl = payoutLabel(order.p2pmPayoutMethod);
+  const mask = maskPayoutRecipient(
+    order.p2pmPayoutMethod,
+    order.payoutRecipient,
+    order.idrxPayoutBankCode,
+  );
+  const pl = payoutLabelFromOrder(order);
   const idrN = order.idrAmount != null ? `Rp ${Number(order.idrAmount).toLocaleString("id-ID")}` : "IDR";
 
   hops.push({
     id: "fiat-settled-w",
-    title: bankBca ? `IDR settled · ${pl} (IDRX → IDR)` : `IDR settled · ${pl}`,
+    title: idrxPath ? `IDR settled · ${pl} (IDRX → IDR)` : `IDR settled · ${pl}`,
     description: tailMilestonesDone
       ? stateStr === "COMPLETED"
         ? `Final payout complete. ${idrN} to ${pl} ${mask}.`
@@ -288,8 +310,7 @@ export function buildOfframpRouteHops(order: OfframpOrderFields | null | undefin
     return buildWrappedDepositRouteHops(order);
   }
 
-  const bankBca =
-    String(order.p2pmPayoutMethod || "").toLowerCase() === "bank_transfer";
+  const idrxPath = usesIdrxRedeemPath(order);
 
   const stateStr = String(order.state || "ROUTE_SHOWN");
   const si = effectiveStateIndex(order, stateStr);
@@ -310,8 +331,8 @@ export function buildOfframpRouteHops(order: OfframpOrderFields | null | undefin
   const idrxBurnReady = Boolean(order.idrxBurnTxHash?.trim());
   const idrxRedeemReady = Boolean(order.idrxRedeemId?.trim());
 
-  /** GoPay: after LiFi, treat tail as done once swap tx known (p2p off-chain). Bank: after redeem id. */
-  const tailMilestonesDone = !failed && (bankBca ? idrxRedeemReady : swapTxReady);
+  /** Legacy GoPay: after LiFi, treat tail as done once swap tx known (p2p off-chain). IDRX: after redeem id. */
+  const tailMilestonesDone = !failed && (idrxPath ? idrxRedeemReady : swapTxReady);
   const tailMilestonesActive =
     !failed &&
     !tailMilestonesDone &&
@@ -402,24 +423,24 @@ export function buildOfframpRouteHops(order: OfframpOrderFields | null | undefin
     links: boltzLinks,
   });
 
-  // 3. LiFi — USDC (GoPay) or IDRX (BCA bank)
+  // 3. LiFi — USDC (legacy p2p) or IDRX (current offramp)
   const swapLinks: RouteHopLink[] = [];
   if (order.swapTxHash) {
     swapLinks.push({
-      label: bankBca
+      label: idrxPath
         ? "USDT → IDRX (Arbitrum userOp / tx)"
         : "USDT → USDC (Arbitrum userOp / tx)",
       href: `${ARBISCAN_TX}${order.swapTxHash}`,
     });
   }
 
-  const lifiTitle = bankBca
+  const lifiTitle = idrxPath
     ? "LiFi: USDT → IDRX (Arbitrum → Base)"
     : "LiFi: USDT → USDC (Arbitrum → Base)";
-  const lifiDescDone = bankBca
+  const lifiDescDone = idrxPath
     ? "Cross-chain swap submitted; IDRX lands on the Base custody wallet for burn & redeem."
     : "Cross-chain swap submitted; USDC targets your Base recipient.";
-  const lifiDescActive = bankBca
+  const lifiDescActive = idrxPath
     ? "Quoting LiFi, approving USDT, bridging to Base IDRX…"
     : "Quoting LiFi, approving USDT, executing bridge/swap…";
 
@@ -435,8 +456,8 @@ export function buildOfframpRouteHops(order: OfframpOrderFields | null | undefin
     links: swapLinks,
   });
 
-  // 4. BCA: IDRX burn + redeem API — GoPay: p2p.me
-  if (bankBca) {
+  // 4. IDRX burn + redeem — legacy GoPay: p2p.me
+  if (idrxPath) {
     const idrxLinks: RouteHopLink[] = [{ label: "IDRX redeem docs", href: IDRX_DOCS }];
     if (order.idrxBurnTxHash?.trim()) {
       idrxLinks.unshift({
@@ -453,7 +474,7 @@ export function buildOfframpRouteHops(order: OfframpOrderFields | null | undefin
         : idrxBurnReady
           ? "Burn on Base confirmed; submitting signed redeem-request to IDRX…"
           : swapTxReady
-            ? "Waiting for IDRX on Base, then burn with hashed bank binding and redeem to your BCA account."
+            ? "Waiting for IDRX on Base, then burn with hashed payout binding and redeem to your selected rail."
             : failed && idrxBurnReady
               ? "Burn step did not complete redeem; check IDRX dashboard or support with burn tx."
               : "Starts after IDRX arrives on Base from the LiFi step.",
@@ -484,18 +505,22 @@ export function buildOfframpRouteHops(order: OfframpOrderFields | null | undefin
     });
   }
 
-  // 5. Final IDR to BCA / GoPay
-  const mask = maskPayoutRecipient(order.p2pmPayoutMethod, order.payoutRecipient);
-  const pl = payoutLabel(order.p2pmPayoutMethod);
+  // 5. Final IDR payout
+  const mask = maskPayoutRecipient(
+    order.p2pmPayoutMethod,
+    order.payoutRecipient,
+    order.idrxPayoutBankCode,
+  );
+  const pl = payoutLabelFromOrder(order);
   const idrN = order.idrAmount != null ? `Rp ${Number(order.idrAmount).toLocaleString("id-ID")}` : "IDR";
-  const fiatTitle = bankBca ? `IDR settled · ${pl} (IDRX → IDR)` : `IDR settled · ${pl}`;
-  const fiatDescDoneCompleted = bankBca
+  const fiatTitle = idrxPath ? `IDR settled · ${pl} (IDRX → IDR)` : `IDR settled · ${pl}`;
+  const fiatDescDoneCompleted = idrxPath
     ? `Final payout complete. ${idrN} to ${pl} ${mask} via IDRX liquidation to IDR.`
     : `Final payout complete. ${idrN} to ${pl} ${mask}.`;
-  const fiatDescDoneInProgress = bankBca
+  const fiatDescDoneInProgress = idrxPath
     ? `Payout path to ${pl} ${mask} — IDRX → IDR after redeem is accepted (see burn/redeem step).`
     : `Payout path to ${pl} ${mask} — proceeds after USDC from the swap (LiFi link above).`;
-  const fiatDescDest = bankBca
+  const fiatDescDest = idrxPath
     ? `Destination: ${pl} ${mask}; IDRX burn and redeem route your IDR.`
     : `Destination: ${pl} ${mask}.`;
 
@@ -507,8 +532,8 @@ export function buildOfframpRouteHops(order: OfframpOrderFields | null | undefin
         ? fiatDescDoneCompleted
         : fiatDescDoneInProgress
       : tailMilestonesActive
-        ? bankBca
-          ? `IDRX burn and bank redeem in progress for ${pl} ${mask}.`
+        ? idrxPath
+          ? `IDRX burn and redeem in progress for ${pl} ${mask}.`
           : `Waiting for swap confirmation and explorer link before marking ${pl} ${mask} ready.`
         : failed
           ? `Payout to ${pl} ${mask} was not completed. Check status or support.`

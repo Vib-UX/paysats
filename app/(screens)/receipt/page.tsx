@@ -37,7 +37,7 @@ function ReceiptPage() {
         swapTxHash={order.swapTxHash || undefined}
         p2pmOrderId={order.p2pmOrderId || undefined}
       />
-      <OfframpRouteExpandable order={order} defaultOpen />
+      <OfframpRouteExpandable order={order} />
     </main>
   );
 }

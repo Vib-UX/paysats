@@ -11,11 +11,13 @@ export function sha256HexUtf8(s: string): string {
 
 /**
  * IDRX `burnWithAccountNumber` second argument: hex string binding.
- * Preimage must match IDRX samples: `{bankName}_{bankAccountNumber}` (e.g. `BANK CENTRAL ASIA_4191464375`),
- * then SHA-256. Bank name comes from `IDRX_BCA_BANK_NAME` / `idrxBcaBankName()` (default BCA).
+ * Preimage: `{bankName}_{bankAccount}` (same `bankName` / account string as redeem-request), then SHA-256.
  */
-export function hashBankAccountForIdrxBurn(bankAccountDigits: string): string {
-  const name = idrxBcaBankName();
-  const digits = bankAccountDigits.trim().replace(/\s+/g, "");
-  return sha256HexUtf8(`${name}_${digits}`);
+export function hashBankAccountForIdrxBurn(
+  bankAccount: string,
+  bankName?: string,
+): string {
+  const name = (bankName && bankName.trim()) || idrxBcaBankName();
+  const acct = bankAccount.trim().replace(/\s+/g, "");
+  return sha256HexUtf8(`${name}_${acct}`);
 }

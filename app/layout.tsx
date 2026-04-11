@@ -3,8 +3,9 @@ import "./globals.css";
 import { SiteHeader } from "@/components/site-header";
 
 export const metadata: Metadata = {
-  title: "Paysats — Lightning to IDR",
-  description: "Pay with Lightning, receive IDR to your bank or e-wallet. Built for merchants and spenders.",
+  title: "Paysats — Sats in, Rupiah out",
+  description:
+    "Pay with Lightning (sats in), receive rupiah out to your bank or e-wallet. Built for merchants and spenders.",
   manifest: "/manifest.webmanifest",
   icons: {
     icon: [

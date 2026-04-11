@@ -19,16 +19,23 @@ import {
   executeUsdtToIdrxOnBase,
   executeUsdtToUsdcSwap,
 } from "./swap.js";
-import { createP2pmSellOrder } from "./p2pm.js";
 import {
   fetchLifiQuote,
   LIFI_BTCB_BSC,
   LIFI_CBTC_BASE,
   LIFI_IDRX_BASE,
-  LIFI_USDC_BASE,
 } from "./lifiQuote.js";
 import { idrxBaseRecipientAddress } from "./idrxConfig.js";
+import { getCachedIdrxTransactionMethods } from "./idrxRedeem.js";
+import {
+  isIdrxEwalletBankCode,
+  sortIdrxMethodsForUi,
+} from "./idrxPayoutClassify.js";
 import { runBankIdrxBurnOnly, runBankIdrxRedeemOnly } from "./idrxOfframp.js";
+import {
+  readLiquidityDisplayStats,
+  recordOfframpCompletionVolume,
+} from "./liquidityDisplayStats.js";
 import { waitForArbitrumUsdtBalance } from "./arbUsdtConfirm.js";
 
 const app = express();
@@ -72,6 +79,8 @@ type MemoryOrder = {
   depositChainId?: number | null;
   depositTokenAddress?: string | null;
   depositToAddress?: string | null;
+  idrxPayoutBankCode?: string | null;
+  idrxPayoutBankName?: string | null;
 };
 
 const memoryOrders = new Map<string, MemoryOrder>();
@@ -258,11 +267,35 @@ function delay(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
 }
 
-function normalizePayoutMethod(method: unknown): "gopay" | "bank_transfer" {
-  const m = String(method || "").trim().toLowerCase();
-  if (m === "gopay") return "gopay";
+function normalizePayoutMethod(method: unknown): "bank_transfer" {
+  const m = String(method || "bank_transfer").trim().toLowerCase();
+  if (m === "gopay") {
+    throw new Error(
+      "Unsupported payoutMethod: use bank_transfer with idrxBankCode and idrxBankName from IDRX methods.",
+    );
+  }
   if (m === "bank_transfer" || m === "bank" || m === "bca") return "bank_transfer";
-  throw new Error("Invalid payoutMethod (expected gopay or bank_transfer)");
+  throw new Error("Invalid payoutMethod (expected bank_transfer)");
+}
+
+async function assertValidIdrxPayoutPair(
+  bankCode: string,
+  bankName: string,
+): Promise<void> {
+  const out = await getCachedIdrxTransactionMethods();
+  const rows = out.data ?? [];
+  const c = bankCode.trim();
+  const n = bankName.trim();
+  const ok = rows.some(
+    (r) =>
+      String(r.bankCode ?? "").trim() === c &&
+      String(r.bankName ?? "").trim() === n,
+  );
+  if (!ok) {
+    throw new Error(
+      "idrxBankCode and idrxBankName must match a row from IDRX GET /transaction/method",
+    );
+  }
 }
 
 function normalizeBankAccountName(raw: unknown): string {
@@ -283,19 +316,19 @@ function evmDepositQrValue(toAddress: string, chainId: number): string {
   return `ethereum:${toAddress}@${chainId}`;
 }
 
-function normalizeRecipientDetails(payoutMethod: "gopay" | "bank_transfer", raw: unknown): string {
+function normalizeRecipientDetails(isEwallet: boolean, raw: unknown): string {
   const s = String(raw || "").trim();
   if (!s) throw new Error("recipientDetails is required");
 
-  if (payoutMethod === "gopay") {
-    // Require +CC-NNN… (e.g. +91-9650840815). Preserve formatting for downstream automation.
+  if (isEwallet) {
     if (!/^\+\d{1,3}-\d{6,14}$/.test(s)) {
-      throw new Error("GoPay recipientDetails must be in +CC-NNN… format (example: +91-9650840815)");
+      throw new Error(
+        "E-wallet recipientDetails must be in +CC-NNN… format (example: +62-81234567890)",
+      );
     }
     return s;
   }
 
-  // bank_transfer: keep digits only
   const digits = s.replace(/[^\d]/g, "");
   if (!digits) throw new Error("recipientDetails is required");
   return digits;
@@ -319,9 +352,10 @@ async function watchInvoiceAndRunOfframpPipeline(params: {
   orderId: string;
   bolt11: string;
   satAmount: number;
-  payoutMethod: "gopay" | "bank_transfer";
   recipientDetails: string;
   bankAccountName: string;
+  idrxPayoutBankCode: string;
+  idrxPayoutBankName: string;
 }): Promise<void> {
   if (offrampWatchers.has(params.orderId)) {
     log.warn("pipeline", "watcher already running; skip duplicate", { orderId: params.orderId });
@@ -333,7 +367,7 @@ async function watchInvoiceAndRunOfframpPipeline(params: {
     log.info("pipeline", "offramp pipeline started — waiting for user to pay funding invoice", {
       orderId: params.orderId,
       satAmount: params.satAmount,
-      payoutMethod: params.payoutMethod,
+      idrxPayoutBankCode: params.idrxPayoutBankCode,
       fundingInvoicePrefix: params.bolt11.slice(0, 28) + (params.bolt11.length > 28 ? "…" : ""),
       fundingInvoiceLen: params.bolt11.length
     });
@@ -611,7 +645,7 @@ async function watchInvoiceAndRunOfframpPipeline(params: {
     const pauseAfterLifi =
       process.env.PAUSE_AFTER_LIFI === "1" || process.env.PAUSE_P2P_FLOW === "1";
 
-    if (params.payoutMethod === "bank_transfer") {
+    {
       const idrxRecipient = idrxBaseRecipientAddress();
       log.info("pipeline", "USDT on Arbitrum — next: LiFi USDT → IDRX (Base)", {
         orderId: params.orderId,
@@ -712,6 +746,7 @@ async function watchInvoiceAndRunOfframpPipeline(params: {
       const burnOut = await runBankIdrxBurnOnly({
         orderId: params.orderId,
         recipientDigits: params.recipientDetails,
+        payoutBankName: params.idrxPayoutBankName,
         idrxAmountMinRaw: idrxSwap.idrxAmountMinRaw,
         burnAmountIdr,
       });
@@ -741,6 +776,8 @@ async function watchInvoiceAndRunOfframpPipeline(params: {
         recipientDigits: params.recipientDetails,
         bankAccountName: params.bankAccountName,
         holderAddress: burnOut.holderAddress,
+        bankCode: params.idrxPayoutBankCode,
+        bankName: params.idrxPayoutBankName,
       });
       {
         const mem = memoryOrders.get(params.orderId);
@@ -763,128 +800,32 @@ async function watchInvoiceAndRunOfframpPipeline(params: {
       await advanceOrderState(params.orderId, "P2PM_ORDER_CONFIRMED");
       await advanceOrderState(params.orderId, "IDR_SETTLED");
       await advanceOrderState(params.orderId, "COMPLETED");
-      log.info("pipeline", "offramp pipeline completed (IDRX bank path)", {
+      log.info("pipeline", "offramp pipeline completed (IDRX path)", {
         orderId: params.orderId,
       });
-    } else {
-      const usdcRecipientBase =
-        process.env.LIFI_TO_ADDRESS?.trim() || "0x47D02EE816f6D66E39333F3a06dB14294F773378";
-      log.info("pipeline", "USDT on Arbitrum — next: USDT→USDC (Base) for GoPay / p2p.me", {
-        orderId: params.orderId,
-        safePrefix: `${receiveAddress.slice(0, 10)}…${receiveAddress.slice(-6)}`,
-        usdcBaseRecipient: usdcRecipientBase,
-      });
-      if (process.env.LIFI_API_KEY?.trim()) {
-        try {
-          log.info("pipeline", "LiFi quote request (Arb USDT → Base USDC)", {
-            orderId: params.orderId,
-            fromAmountMinUnits,
-          });
-          const quote = await fetchLifiQuote({
-            apiKey: String(process.env.LIFI_API_KEY),
-            fromAddress: receiveAddress,
-            toAddress: usdcRecipientBase,
-            fromAmount: fromAmountMinUnits,
-            toToken: LIFI_USDC_BASE,
-            slippage: process.env.LIFI_SLIPPAGE?.trim() || "0.03",
-          });
-          log.info("lifi", "quote fetched for offramp (USDC)", {
-            orderId: params.orderId,
-            toAddress: usdcRecipientBase,
-            tool: quote.toolDetails?.name || quote.tool || "(unknown)",
-            toAmountMin: quote.estimate?.toAmountMin,
-            toAmount: quote.estimate?.toAmount,
-          });
-        } catch (e) {
-          log.warn("lifi", "quote fetch failed (continuing with swap)", {
-            orderId: params.orderId,
-            error: e instanceof Error ? e.message : String(e),
+      try {
+        const oDone =
+          memoryOrders.get(params.orderId) ??
+          (await prisma.order.findUnique({ where: { id: params.orderId } }));
+        const merch = String((oDone as { merchantName?: string | null })?.merchantName || "");
+        const idrDone = Number((oDone as { idrAmount?: number | null })?.idrAmount);
+        if (
+          merch === "Offramp" &&
+          Number.isFinite(idrDone) &&
+          idrDone > 0 &&
+          params.satAmount > 0
+        ) {
+          recordOfframpCompletionVolume({
+            satAmount: params.satAmount,
+            idrAmount: idrDone,
           });
         }
-      } else {
-        log.info("pipeline", "LIFI_API_KEY not set — skipping LiFi quote log step", {
+      } catch (e) {
+        log.warn("liquidity", "platform stats update skipped", {
           orderId: params.orderId,
+          error: e instanceof Error ? e.message : String(e),
         });
       }
-
-      log.info("pipeline", "executeUsdtToUsdcSwap (WDK+LiFi)", {
-        orderId: params.orderId,
-        usdtAmount: Number(boltz.usdtAmount || 0) || 0,
-      });
-      const swap = await executeUsdtToUsdcSwap({
-        usdtAmount: Number(boltz.usdtAmount || 0) || 0,
-        walletAddress: receiveAddress,
-        toAddress: usdcRecipientBase,
-      });
-      log.info("pipeline", "USDC swap step finished", {
-        orderId: params.orderId,
-        usdcAmount: swap.usdcAmount,
-        swapTxHash: swap.txHash,
-      });
-      {
-        const mem = memoryOrders.get(params.orderId);
-        if (mem) {
-          memoryOrders.set(params.orderId, {
-            ...mem,
-            usdcAmount: swap.usdcAmount,
-            swapTxHash: swap.txHash,
-            updatedAt: nowIso(),
-          });
-        } else {
-          await prisma.order
-            .update({
-              where: { id: params.orderId },
-              data: { usdcAmount: swap.usdcAmount, swapTxHash: swap.txHash },
-            })
-            .catch(() => {});
-        }
-      }
-      await advanceOrderState(params.orderId, "USDC_SWAPPED");
-
-      if (pauseAfterLifi) {
-        log.warn("pipeline", "PAUSE_AFTER_LIFI — stopping after USDC swap (no p2p.me)", {
-          orderId: params.orderId,
-          usdcAmount: swap.usdcAmount,
-        });
-        return;
-      }
-
-      log.info("pipeline", "starting P2P.me IDR offramp", { orderId: params.orderId });
-      const p2pm = await createP2pmSellOrder({
-        usdcAmount: swap.usdcAmount,
-        payoutMethod: params.payoutMethod,
-        recipientDetails: params.recipientDetails,
-      });
-      log.info("pipeline", "P2P.me sell order submitted", {
-        orderId: params.orderId,
-        p2pmOrderId: p2pm.orderId,
-        status: p2pm.status,
-      });
-      {
-        const mem = memoryOrders.get(params.orderId);
-        if (mem) {
-          memoryOrders.set(params.orderId, {
-            ...mem,
-            p2pmOrderId: p2pm.orderId,
-            p2pmPayoutMethod: params.payoutMethod,
-            updatedAt: nowIso(),
-          });
-        } else {
-          await prisma.order
-            .update({
-              where: { id: params.orderId },
-              data: { p2pmOrderId: p2pm.orderId, p2pmPayoutMethod: params.payoutMethod },
-            })
-            .catch(() => {});
-        }
-      }
-      await advanceOrderState(params.orderId, "P2PM_ORDER_PLACED");
-      await advanceOrderState(params.orderId, "P2PM_ORDER_CONFIRMED");
-      await advanceOrderState(params.orderId, "IDR_SETTLED");
-      await advanceOrderState(params.orderId, "COMPLETED");
-      log.info("pipeline", "offramp pipeline completed (GoPay / p2p.me)", {
-        orderId: params.orderId,
-      });
     }
   } catch (error) {
     log.error("pipeline", "offramp pipeline failed", error, { orderId: params.orderId });
@@ -931,6 +872,78 @@ app.get("/api/quote/btc-idr", async (_req, res) => {
   }
 });
 
+app.get("/api/idrx/transaction-methods", async (_req, res) => {
+  try {
+    log.info("api", "GET /api/idrx/transaction-methods");
+    const raw = await getCachedIdrxTransactionMethods();
+    const sorted = sortIdrxMethodsForUi(raw.data ?? []);
+    const data = sorted.map((r) => ({
+      bankCode: r.bankCode,
+      bankName: r.bankName,
+      maxAmountTransfer: r.maxAmountTransfer,
+      kind: isIdrxEwalletBankCode(r.bankCode) ? ("ewallet" as const) : ("bank" as const),
+    }));
+    return res.json({
+      statusCode: raw.statusCode,
+      message: raw.message,
+      data,
+    });
+  } catch (error) {
+    log.error("api", "GET /api/idrx/transaction-methods failed", error);
+    return res.status(500).json({
+      error: error instanceof Error ? error.message : "IDRX methods unavailable",
+    });
+  }
+});
+
+app.get("/api/liquidity/platform-stats", async (_req, res) => {
+  try {
+    log.info("api", "GET /api/liquidity/platform-stats");
+    const stats = readLiquidityDisplayStats();
+    return res.json({
+      ...stats,
+      fetchedAt: new Date().toISOString(),
+    });
+  } catch (error) {
+    log.error("api", "GET /api/liquidity/platform-stats failed", error);
+    return res.status(500).json({
+      error: error instanceof Error ? error.message : "Failed to load platform stats",
+    });
+  }
+});
+
+app.get("/api/offramp/routed-snapshots", async (_req, res) => {
+  try {
+    log.info("api", "GET /api/offramp/routed-snapshots");
+    const rows = await prisma.order.findMany({
+      where: { merchantName: "Offramp" },
+      orderBy: { createdAt: "desc" },
+      take: 80,
+      select: {
+        id: true,
+        createdAt: true,
+        state: true,
+        satAmount: true,
+        idrAmount: true,
+        idrxAmountIdr: true,
+        depositChannel: true,
+      },
+    });
+    return res.json({
+      orders: rows,
+      fetchedAt: new Date().toISOString(),
+    });
+  } catch (error) {
+    if (isDbAccessError(error)) {
+      return res.json({ orders: [], fetchedAt: new Date().toISOString() });
+    }
+    log.error("api", "GET /api/offramp/routed-snapshots failed", error);
+    return res.status(500).json({
+      error: error instanceof Error ? error.message : "Failed to load routed orders",
+    });
+  }
+});
+
 app.post("/api/nwc/create-invoice", async (req, res) => {
   try {
     log.info("api", "POST /api/nwc/create-invoice", { body: { ...req.body, nwcUrl: undefined } });
@@ -961,7 +974,19 @@ app.post("/api/offramp/create", async (req, res) => {
     log.info("api", "POST /api/offramp/create", { body: { ...req.body, recipientDetails: undefined } });
 
     const payoutMethod = normalizePayoutMethod(req.body.payoutMethod);
-    const recipientDetails = normalizeRecipientDetails(payoutMethod, req.body.recipientDetails);
+    const idrxBankCode = String(req.body.idrxBankCode || "").trim();
+    const idrxBankName = String(req.body.idrxBankName || "").trim();
+    if (!idrxBankCode || !idrxBankName) {
+      return res.status(400).json({
+        error: "idrxBankCode and idrxBankName are required (from GET /api/idrx/transaction-methods)",
+      });
+    }
+    await assertValidIdrxPayoutPair(idrxBankCode, idrxBankName);
+    const isEwallet = isIdrxEwalletBankCode(idrxBankCode);
+    const recipientDetails = normalizeRecipientDetails(
+      isEwallet,
+      req.body.recipientDetails,
+    );
     const bankAccountName = normalizeBankAccountName(req.body.bankAccountName);
     const depositChannel = normalizeDepositChannel(req.body.depositChannel);
 
@@ -1027,6 +1052,8 @@ app.post("/api/offramp/create", async (req, res) => {
             btcIdr,
             btcIdrFetchedAt: new Date(fetchedAt),
             p2pmPayoutMethod: payoutMethod,
+            idrxPayoutBankCode: idrxBankCode,
+            idrxPayoutBankName: idrxBankName,
             payoutRecipient: recipientDetails,
             bankAccountName,
             invoiceBolt11: null,
@@ -1051,6 +1078,8 @@ app.post("/api/offramp/create", async (req, res) => {
           btcIdr,
           btcIdrFetchedAt: fetchedAt,
           p2pmPayoutMethod: payoutMethod,
+          idrxPayoutBankCode: idrxBankCode,
+          idrxPayoutBankName: idrxBankName,
           payoutRecipient: recipientDetails,
           bankAccountName,
           invoiceBolt11: null,
@@ -1112,7 +1141,7 @@ app.post("/api/offramp/create", async (req, res) => {
       invoice = await createInvoice(
         client,
         satAmount,
-        `paysats offramp ${idrAmount.toLocaleString("id-ID")} IDR (${payoutMethod})`
+        `paysats offramp ${idrAmount.toLocaleString("id-ID")} IDR (${idrxBankName})`
       );
     } catch (e) {
       if (process.env.ALLOW_STUB_INVOICE === "1") {
@@ -1140,6 +1169,8 @@ app.post("/api/offramp/create", async (req, res) => {
           btcIdr,
           btcIdrFetchedAt: new Date(fetchedAt),
           p2pmPayoutMethod: payoutMethod,
+          idrxPayoutBankCode: idrxBankCode,
+          idrxPayoutBankName: idrxBankName,
           payoutRecipient: recipientDetails,
           bankAccountName,
           invoiceBolt11: invoice.bolt11,
@@ -1160,6 +1191,8 @@ app.post("/api/offramp/create", async (req, res) => {
         btcIdr,
         btcIdrFetchedAt: fetchedAt,
         p2pmPayoutMethod: payoutMethod,
+        idrxPayoutBankCode: idrxBankCode,
+        idrxPayoutBankName: idrxBankName,
         payoutRecipient: recipientDetails,
         bankAccountName,
         invoiceBolt11: invoice.bolt11,
@@ -1193,9 +1226,10 @@ app.post("/api/offramp/create", async (req, res) => {
         orderId,
         bolt11: invoice.bolt11,
         satAmount,
-        payoutMethod,
         recipientDetails,
         bankAccountName,
+        idrxPayoutBankCode: idrxBankCode,
+        idrxPayoutBankName: idrxBankName,
       }).catch((e) => log.error("pipeline", "watcher crashed (unhandled)", e, { orderId }));
     } else if (!client) {
       log.warn("pipeline", "Not starting invoice watcher (stub invoice or no NWC client)", { orderId });
