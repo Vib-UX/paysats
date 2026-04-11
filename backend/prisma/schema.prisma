@@ -43,6 +43,10 @@ model Order {
   swapTxHash       String?
   p2pmOrderId      String?
   p2pmPayoutMethod String?
+  /** IDRX redeem-request bankCode from GET /transaction/method (e.g. 014 BCA, 1011 GOPAY). */
+  idrxPayoutBankCode String?
+  /** IDRX redeem-request bankName (must match methods list for validation). */
+  idrxPayoutBankName String?
   payoutRecipient  String?
   /** Display / legal name for IDRX redeem (bank transfer). */
   bankAccountName  String?

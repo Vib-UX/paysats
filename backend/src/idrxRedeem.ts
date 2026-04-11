@@ -72,6 +72,24 @@ export async function postIdrxRedeemRequest(
 }
 
 /** GET /api/transaction/method — banks + e-wallets (GoPay, OVO, DANA, …). */
+let idrxMethodsCache: { atMs: number; payload: IdrxMethodsResponse } | null = null;
+const IDRX_METHODS_TTL_MS =
+  Number(process.env.IDRX_METHODS_CACHE_MS?.trim() || "") || 10 * 60 * 1000;
+
+/** Signed GET with short in-memory TTL (default 10m). */
+export async function getCachedIdrxTransactionMethods(): Promise<IdrxMethodsResponse> {
+  const now = Date.now();
+  if (
+    idrxMethodsCache &&
+    now - idrxMethodsCache.atMs < IDRX_METHODS_TTL_MS
+  ) {
+    return idrxMethodsCache.payload;
+  }
+  const payload = await getIdrxTransactionMethods();
+  idrxMethodsCache = { atMs: now, payload };
+  return payload;
+}
+
 export async function getIdrxTransactionMethods(): Promise<IdrxMethodsResponse> {
   const apiKey = process.env.IDRX_API_KEY?.trim();
   const secret = process.env.IDRX_API_SECRET?.trim();

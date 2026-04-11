@@ -22,6 +22,8 @@ import { IdrxLiquiditySection } from "@/components/idrx-liquidity-section";
 import { IdrxMark } from "@/components/idrx-mark";
 import { TetherMark } from "@/components/tether-mark";
 import { backendFetch } from "@/lib/backend-fetch";
+import { formatSatsAsBtc } from "@/lib/format-sats-btc";
+import { isIdrxEwalletBankCode } from "@/lib/idrx-payout-classify";
 import type { OfframpOrderFields } from "@/lib/offramp-route";
 import { ORDER_STATES, type OrderState } from "@/lib/state";
 
@@ -57,7 +59,31 @@ function buildValidatePaymentProofUrl(
   return `https://validate-payment.com/?${q.toString()}`;
 }
 
-type PayoutMethod = "bank_transfer" | "gopay";
+type IdrxMethodRow = {
+  bankCode: string;
+  bankName: string;
+  maxAmountTransfer?: string;
+  kind: "bank" | "ewallet";
+};
+
+/** Same rails as backend `isIdrxEwalletBankCode`; display order matches product list. */
+const EWALLET_CODE_ORDER = [
+  "911",
+  "789",
+  "1010",
+  "1011",
+  "1012",
+  "1013",
+  "1014",
+] as const;
+
+const GOPAY_BANK_CODE = "1011";
+
+function defaultEwalletBankCode(methods: IdrxMethodRow[]): string {
+  const goPay = methods.find((m) => m.bankCode === GOPAY_BANK_CODE);
+  return goPay?.bankCode ?? methods[0]!.bankCode;
+}
+
 /** Single control for POST /api/offramp/create `depositChannel`. */
 type FundingSource = "lightning" | "cbbtc" | "btcb";
 type WebLnProvider = {
@@ -112,8 +138,12 @@ function isFundingInvoiceSettled(order: OfframpOrderFields | null): boolean {
 export default function OfframpPage() {
   const router = useRouter();
 
-  const [payoutMethod, setPayoutMethod] =
-    useState<PayoutMethod>("bank_transfer");
+  const [idrxMethods, setIdrxMethods] = useState<IdrxMethodRow[]>([]);
+  const [idrxMethodsError, setIdrxMethodsError] = useState("");
+  const [idrxBankCode, setIdrxBankCode] = useState("");
+  const [payoutRailTab, setPayoutRailTab] = useState<"bank" | "ewallet">(
+    "bank",
+  );
   const [recipient, setRecipient] = useState("");
 
   const [btcIdr, setBtcIdr] = useState<number | null>(null);
@@ -153,20 +183,45 @@ export default function OfframpPage() {
   const idrNum = useMemo(() => Number(digitsOnly(idr) || "0"), [idr]);
   const satsNum = useMemo(() => Number(digitsOnly(sats) || "0"), [sats]);
 
+  const bankMethods = useMemo(() => {
+    const banks = idrxMethods.filter((m) => !isIdrxEwalletBankCode(m.bankCode));
+    return [...banks].sort((a, b) => {
+      if (a.bankCode === "014" && b.bankCode !== "014") return -1;
+      if (b.bankCode === "014" && a.bankCode !== "014") return 1;
+      return a.bankName.localeCompare(b.bankName, "id-ID");
+    });
+  }, [idrxMethods]);
+
+  const ewalletMethods = useMemo(() => {
+    const ew = idrxMethods.filter((m) => isIdrxEwalletBankCode(m.bankCode));
+    const rank = new Map(
+      EWALLET_CODE_ORDER.map((c, i) => [c, i] as const),
+    );
+    return [...ew].sort(
+      (a, b) =>
+        (rank.get(a.bankCode) ?? 99) - (rank.get(b.bankCode) ?? 99),
+    );
+  }, [idrxMethods]);
+
+  const selectedIdrxMethod = useMemo(
+    () => idrxMethods.find((m) => m.bankCode === idrxBankCode),
+    [idrxMethods, idrxBankCode],
+  );
+
+  const payoutIsEwallet = payoutRailTab === "ewallet";
+
   const recipientNormalized = useMemo(() => {
-    if (payoutMethod === "gopay") return normalizeGopayMsisdn(recipient);
+    if (payoutIsEwallet) return normalizeGopayMsisdn(recipient);
     return digitsOnly(recipient);
-  }, [recipient, payoutMethod]);
+  }, [recipient, payoutIsEwallet]);
 
   const recipientValid = useMemo(() => {
     const d = recipientNormalized;
-    if (payoutMethod === "gopay") {
-      // Require explicit country code format: +CC-NNN...
+    if (payoutIsEwallet) {
       return /^\+\d{1,3}-\d{6,14}$/.test(d);
     }
-    // BCA account numbers are commonly 10 digits; allow 8–16 to reduce false negatives.
     return d.length >= 8 && d.length <= 16;
-  }, [payoutMethod, recipientNormalized]);
+  }, [payoutIsEwallet, recipientNormalized]);
 
   const amountValid = useMemo(() => {
     if (lastEdited === "idr") return Number.isFinite(idrNum) && idrNum > 0;
@@ -174,9 +229,88 @@ export default function OfframpPage() {
   }, [idrNum, satsNum, lastEdited]);
 
   const canPay = useMemo(
-    () => amountValid && recipientValid && !loadingPay,
-    [amountValid, recipientValid, loadingPay],
+    () =>
+      amountValid &&
+      recipientValid &&
+      !loadingPay &&
+      Boolean(idrxBankCode) &&
+      idrxMethods.length > 0 &&
+      !idrxMethodsError &&
+      (payoutRailTab === "bank"
+        ? bankMethods.length > 0
+        : ewalletMethods.length > 0),
+    [
+      amountValid,
+      recipientValid,
+      loadingPay,
+      idrxBankCode,
+      idrxMethods.length,
+      idrxMethodsError,
+      payoutRailTab,
+      bankMethods.length,
+      ewalletMethods.length,
+    ],
   );
+
+  useEffect(() => {
+    if (!idrxMethods.length) return;
+    if (payoutRailTab === "bank") {
+      if (!bankMethods.length) return;
+      if (!bankMethods.some((m) => m.bankCode === idrxBankCode)) {
+        setIdrxBankCode(bankMethods[0]!.bankCode);
+      }
+    } else {
+      if (!ewalletMethods.length) return;
+      if (!ewalletMethods.some((m) => m.bankCode === idrxBankCode)) {
+        setIdrxBankCode(defaultEwalletBankCode(ewalletMethods));
+      }
+    }
+  }, [payoutRailTab, idrxMethods, bankMethods, ewalletMethods, idrxBankCode]);
+
+  useEffect(() => {
+    let mounted = true;
+    void (async () => {
+      try {
+        setIdrxMethodsError("");
+        const res = await backendFetch("/api/idrx/transaction-methods");
+        const body = (await res.json()) as {
+          error?: string;
+          data?: IdrxMethodRow[];
+        };
+        if (!res.ok) throw new Error(body.error || "Failed to load payout methods");
+        const rows = Array.isArray(body.data) ? body.data : [];
+        if (!mounted) return;
+        setIdrxMethods(rows);
+        setIdrxBankCode((prev) => {
+          const banks = rows.filter((r) => !isIdrxEwalletBankCode(r.bankCode));
+          const bcaFirst = [...banks].sort((a, b) => {
+            if (a.bankCode === "014" && b.bankCode !== "014") return -1;
+            if (b.bankCode === "014" && a.bankCode !== "014") return 1;
+            return a.bankName.localeCompare(b.bankName, "id-ID");
+          });
+          const defaultBank = bcaFirst[0]?.bankCode ?? rows[0]?.bankCode ?? "";
+          if (
+            prev &&
+            rows.some((r) => r.bankCode === prev) &&
+            !isIdrxEwalletBankCode(prev)
+          ) {
+            return prev;
+          }
+          return defaultBank;
+        });
+        setPayoutRailTab("bank");
+      } catch (e) {
+        if (!mounted) return;
+        setIdrxMethods([]);
+        setIdrxMethodsError(
+          e instanceof Error ? e.message : "Failed to load payout methods",
+        );
+      }
+    })();
+    return () => {
+      mounted = false;
+    };
+  }, []);
 
   useEffect(() => {
     let mounted = true;
@@ -263,17 +397,25 @@ export default function OfframpPage() {
     }
     setInvoiceOpen(false);
     try {
+      const idrxBankName = selectedIdrxMethod?.bankName?.trim() ?? "";
+      if (!idrxBankCode || !idrxBankName) {
+        throw new Error("Select a payout bank or e-wallet.");
+      }
       const body =
         lastEdited === "idr"
           ? {
               idrAmount: idrNum,
-              payoutMethod,
+              payoutMethod: "bank_transfer" as const,
+              idrxBankCode,
+              idrxBankName,
               recipientDetails: recipientNormalized,
               depositChannel: fundingSource,
             }
           : {
               satAmount: satsNum,
-              payoutMethod,
+              payoutMethod: "bank_transfer" as const,
+              idrxBankCode,
+              idrxBankName,
               recipientDetails: recipientNormalized,
               depositChannel: fundingSource,
             };
@@ -383,7 +525,13 @@ export default function OfframpPage() {
       invoiceBolt11: base.invoiceBolt11 || bolt11 || undefined,
       invoiceLnPreimage:
         lightningPaymentPreimage?.trim() || base.invoiceLnPreimage || undefined,
-      p2pmPayoutMethod: base.p2pmPayoutMethod || payoutMethod,
+      p2pmPayoutMethod: base.p2pmPayoutMethod || "bank_transfer",
+      idrxPayoutBankCode:
+        base.idrxPayoutBankCode || idrxBankCode || undefined,
+      idrxPayoutBankName:
+        base.idrxPayoutBankName ||
+        selectedIdrxMethod?.bankName ||
+        undefined,
       payoutRecipient: base.payoutRecipient || recipientNormalized || undefined,
       depositChannel: base.depositChannel ?? depositInfo?.channel ?? undefined,
       depositChainId: base.depositChainId ?? depositInfo?.chainId ?? undefined,
@@ -396,7 +544,8 @@ export default function OfframpPage() {
     bolt11,
     depositInfo,
     lightningPaymentPreimage,
-    payoutMethod,
+    idrxBankCode,
+    selectedIdrxMethod?.bankName,
     recipientNormalized,
   ]);
 
@@ -408,31 +557,40 @@ export default function OfframpPage() {
   const primaryCurrency = activeCurrency;
   const primaryValue =
     primaryCurrency === "idr" ? formatIdrDotsFromDigits(idr) : sats;
-  const primaryLabel = primaryCurrency === "idr" ? "IDR" : "sats";
+  const primaryLabel = primaryCurrency === "idr" ? "Rupiah out" : "Sats in";
   const secondaryPreview = useMemo(() => {
     if (!btcIdr) return null;
+    const wrappedOnchain =
+      fundingSource === "cbbtc" || fundingSource === "btcb";
     if (primaryCurrency === "idr") {
-      return `${formatIdr(Math.max(1, Math.ceil((idrNum / btcIdr) * 1e8)))} sats`;
+      const satsIn = Math.max(1, Math.ceil((idrNum / btcIdr) * 1e8));
+      const btcBit =
+        wrappedOnchain && satsIn > 0 ? ` · ≈ ${formatSatsAsBtc(satsIn)} BTC` : "";
+      return `≈ ${formatIdr(satsIn)} sats in${btcBit}`;
     }
-    return `IDR ${formatIdr(Math.max(0, Math.floor((satsNum / 1e8) * btcIdr)))}`;
-  }, [btcIdr, idrNum, satsNum, primaryCurrency]);
+    const rpOut = Math.max(0, Math.floor((satsNum / 1e8) * btcIdr));
+    const btcBit =
+      wrappedOnchain && satsNum > 0 ? ` · ≈ ${formatSatsAsBtc(satsNum)} BTC` : "";
+    return `≈ ${formatIdr(rpOut)} rupiah out${btcBit}`;
+  }, [btcIdr, idrNum, satsNum, primaryCurrency, fundingSource]);
 
   return (
     <main className="mx-auto w-full max-w-lg px-4 pb-16 pt-2">
       <div className="mb-6">
         <h1 className="text-2xl font-black leading-tight text-white">
-          Lightning in. Rupiah out.
+          Sats in. Rupiah out.
         </h1>
         <p className="mt-3 text-sm leading-relaxed text-zinc-400">
-          Settle BTC over Lightning into IDR. Pay the LN invoice; we route
-          liquidity via stablecoins to BCA or GoPay.{" "}
+          Settle BTC over Lightning: sats in on the invoice, rupiah out to your
+          rail. Pay the LN invoice; we route
+          liquidity via stablecoins, then{" "}
+          <span className="mx-0.5 inline-flex items-center gap-1 align-middle font-semibold text-zinc-300">
+            <IdrxMark size={22} alt="" />
+            IDRX
+          </span>{" "}
+          burn and redeem to the bank or e-wallet you pick below.{" "}
           <span className="text-zinc-300">
-            We are the first platform to leverage{" "}
-            <span className="mx-0.5 inline-flex items-center gap-1 align-middle">
-              <IdrxMark size={22} alt="" />
-              <span className="font-semibold text-zinc-200">IDRX</span>
-            </span>{" "}
-            to liquidate to IDR for your BCA account.
+            Choose from IDRX&apos;s live payout rails (BCA listed first).
           </span>
         </p>
         <div className="mt-3 flex items-start gap-2.5 text-xs leading-relaxed text-zinc-500">
@@ -442,15 +600,15 @@ export default function OfframpPage() {
               Powered by Tether.
             </span>{" "}
             Merchant-side settlement uses Tether WDK with USDT on-chain; agent
-            routing runs Boltz (LN→USDT), LiFi (USDT→USDC), then local IDR
-            rails.{" "}
+            routing runs Boltz (LN→USDT), LiFi (USDT→IDRX on Base), then
+            rupiah out on your payout rail.{" "}
             <span className="inline-flex flex-wrap items-center gap-x-1.5 gap-y-0.5 align-middle">
-              For BCA bank payouts, your order route shows{" "}
+              Your order route shows{" "}
               <span className="inline-flex items-center gap-1">
                 <IdrxMark size={16} alt="" className="translate-y-px" />
                 <span className="font-semibold text-zinc-400">IDRX</span>
               </span>{" "}
-              → IDR.
+              → Rupiah on your selected rail.
             </span>
           </p>
         </div>
@@ -467,7 +625,7 @@ export default function OfframpPage() {
           <div className="rounded-2xl border border-border bg-card p-4">
             <div className="flex items-center justify-between">
               <p className="text-xs uppercase tracking-wide text-zinc-400">
-                Amount to settle
+                Sats in / Rupiah out
               </p>
               <div className="flex items-center gap-2">
                 <button
@@ -482,7 +640,7 @@ export default function OfframpPage() {
                       : "border-border text-zinc-300"
                   }`}
                 >
-                  IDR
+                  Rupiah out
                 </button>
                 <button
                   type="button"
@@ -496,11 +654,11 @@ export default function OfframpPage() {
                       : "border-border text-zinc-300"
                   }`}
                 >
-                  sats
+                  Sats in
                 </button>
                 <button
                   type="button"
-                  aria-label="Swap IDR/sats input"
+                  aria-label="Swap sats in and rupiah out"
                   onClick={() => {
                     const next = activeCurrency === "idr" ? "sats" : "idr";
                     setActiveCurrency(next);
@@ -594,7 +752,7 @@ export default function OfframpPage() {
               </div>
               <div className="text-sm text-zinc-400">
                 {secondaryPreview ? (
-                  <span>≈ {secondaryPreview}</span>
+                  <span>{secondaryPreview}</span>
                 ) : (
                   <span>Loading quote…</span>
                 )}
@@ -645,7 +803,7 @@ export default function OfframpPage() {
                   {btcIdr && usdcIdr ? (
                     <p className="mt-0.5 text-xs text-zinc-400">
                       ≈ {formatIdr(Math.ceil(((100 * usdcIdr) / btcIdr) * 1e8))}{" "}
-                      sats
+                      sats in
                     </p>
                   ) : null}
                 </div>
@@ -658,7 +816,7 @@ export default function OfframpPage() {
                 <p>
                   1 BTC ≈{" "}
                   <span className="text-zinc-300">
-                    IDR {formatIdr(Math.round(btcIdr))}
+                    {formatIdr(Math.round(btcIdr))} rupiah out (spot)
                   </span>
                 </p>
               ) : null}
@@ -666,66 +824,118 @@ export default function OfframpPage() {
                 <p className="mt-1 text-red-400">{quoteError}</p>
               ) : null}
               <p className="mt-1">
-                IDR amounts round up to the next sat so the invoice always
-                covers the IDR you entered.
+                Rupiah out is covered by rounding sats in up on the invoice so
+                the Lightning payment always meets the rupiah out you entered.
               </p>
             </div>
           </div>
 
           <div className="rounded-2xl border border-border bg-card p-4">
             <p className="mb-3 text-xs uppercase tracking-wide text-zinc-400">
-              Where to send IDR
+              Rupiah out — destination
             </p>
 
             <div className="grid grid-cols-2 gap-2">
               <button
                 type="button"
-                onClick={() => setPayoutMethod("bank_transfer")}
+                onClick={() => setPayoutRailTab("bank")}
                 className={`tap-target rounded-xl border px-3 py-2 text-sm font-bold ${
-                  payoutMethod === "bank_transfer"
+                  payoutRailTab === "bank"
                     ? "border-gold text-gold"
                     : "border-border text-zinc-300"
                 }`}
               >
-                BCA
+                BANK
               </button>
               <button
                 type="button"
-                onClick={() => setPayoutMethod("gopay")}
+                onClick={() => setPayoutRailTab("ewallet")}
                 className={`tap-target rounded-xl border px-3 py-2 text-sm font-bold ${
-                  payoutMethod === "gopay"
+                  payoutRailTab === "ewallet"
                     ? "border-gold text-gold"
                     : "border-border text-zinc-300"
                 }`}
               >
-                GoPay
+                E-Wallets
               </button>
             </div>
 
-            {payoutMethod === "bank_transfer" ? (
-              <div className="mt-3 flex items-start gap-2.5 text-xs leading-relaxed text-zinc-500">
-                <IdrxMark size={20} alt="" className="mt-0.5 shrink-0" />
-                <p>
-                  <span className="font-semibold text-zinc-400">IDRX</span> —
-                  BCA bank accounts settle with liquidation to IDR — follow the
-                  route steps after you pay.
-                </p>
-              </div>
+            <label
+              htmlFor={
+                payoutRailTab === "bank"
+                  ? "offramp-bank-rail"
+                  : "offramp-ewallet-rail"
+              }
+              className="mt-4 block text-xs font-medium text-zinc-500"
+            >
+              {payoutRailTab === "bank"
+                ? "Bank (IDRX list)"
+                : "E-wallet (IDRX redeem)"}
+            </label>
+            <select
+              key={payoutRailTab}
+              id={
+                payoutRailTab === "bank"
+                  ? "offramp-bank-rail"
+                  : "offramp-ewallet-rail"
+              }
+              value={idrxBankCode}
+              onChange={(e) => setIdrxBankCode(e.target.value)}
+              disabled={
+                !idrxMethods.length ||
+                (payoutRailTab === "bank"
+                  ? !bankMethods.length
+                  : !ewalletMethods.length)
+              }
+              className="tap-target mt-2 w-full appearance-none rounded-xl border border-border bg-card px-4 py-3 text-sm font-bold text-white outline-none focus:border-gold disabled:opacity-50"
+              style={{
+                backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 24 24' stroke='%23a1a1aa'%3E%3Cpath stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='M19 9l-7 7-7-7'/%3E%3C/svg%3E")`,
+                backgroundRepeat: "no-repeat",
+                backgroundPosition: "right 0.75rem center",
+                backgroundSize: "1.25rem",
+                paddingRight: "2.5rem",
+              }}
+            >
+              {(payoutRailTab === "bank" ? bankMethods : ewalletMethods).map(
+                (m) => (
+                  <option key={m.bankCode} value={m.bankCode}>
+                    {m.bankName}
+                  </option>
+                ),
+              )}
+            </select>
+            {payoutRailTab === "ewallet" && !ewalletMethods.length ? (
+              <p className="mt-2 text-xs text-amber-400">
+                No supported e-wallets returned from IDRX for this environment.
+              </p>
+            ) : null}
+            {idrxMethodsError ? (
+              <p className="mt-2 text-xs text-red-400">{idrxMethodsError}</p>
             ) : null}
 
+            <div className="mt-3 flex items-start gap-2.5 text-xs leading-relaxed text-zinc-500">
+              <IdrxMark size={20} alt="" className="mt-0.5 shrink-0" />
+              <p>
+                <span className="font-semibold text-zinc-400">IDRX</span> —
+                {payoutIsEwallet
+                  ? " LinkAja, IMKAS, OVO, GoPay, DANA, ShopeePay, and LinkAja Direct — enter the mobile number registered on that wallet (+CC-NNN…)."
+                  : " Pick your bank (BCA first in the list). Settlement is IDRX liquidation to Rupiah on your account number."}
+              </p>
+            </div>
+
             <label className="mt-4 block text-sm font-semibold text-zinc-300">
-              {payoutMethod === "gopay"
-                ? "GoPay mobile number"
-                : "BCA account number"}
+              {payoutIsEwallet
+                ? "E-wallet mobile number"
+                : "Bank account number"}
             </label>
             <div className="mt-1 grid grid-cols-[1fr_auto] gap-2">
               <input
-                type={payoutMethod === "gopay" ? "tel" : "text"}
-                inputMode={payoutMethod === "gopay" ? "tel" : "numeric"}
-                autoComplete={payoutMethod === "gopay" ? "tel" : "off"}
+                type={payoutIsEwallet ? "tel" : "text"}
+                inputMode={payoutIsEwallet ? "tel" : "numeric"}
+                autoComplete={payoutIsEwallet ? "tel" : "off"}
                 enterKeyHint="done"
                 placeholder={
-                  payoutMethod === "gopay" ? "+CC-NNN…" : "xxxxxxxxxx"
+                  payoutIsEwallet ? "+CC-NNN…" : "xxxxxxxxxx"
                 }
                 value={recipient}
                 onChange={(e) => setRecipient(e.target.value)}
@@ -741,15 +951,15 @@ export default function OfframpPage() {
             </div>
             {!recipientValid && recipient ? (
               <p className="mt-2 text-xs text-red-400">
-                {payoutMethod === "gopay"
-                  ? "Enter GoPay number in +CC-NNN… format."
-                  : "Enter a valid BCA account number."}
+                {payoutIsEwallet
+                  ? "Enter your e-wallet number in +CC-NNN… format."
+                  : "Enter a valid bank account number (digits)."}
               </p>
             ) : null}
 
             <p className="mt-2 text-xs text-zinc-500">
-              Need to read a merchant QRIS first? Use Scan — your payout details
-              here are still BCA or GoPay.
+              Need to read a merchant QRIS first? Use Scan — your payout rail
+              is still the BANK or E-Wallet you selected above.
             </p>
           </div>
 
@@ -760,9 +970,9 @@ export default function OfframpPage() {
             disabled={!canPay}
             className="gold-gradient"
           >
-            {payoutMethod === "gopay"
-              ? "Pay (GoPay payout)"
-              : "Pay (BCA payout)"}
+            {selectedIdrxMethod
+              ? `Pay (${selectedIdrxMethod.bankName})`
+              : "Pay"}
           </Button>
           {error ? <p className="text-sm text-red-400">{error}</p> : null}
         </div>
@@ -893,7 +1103,7 @@ export default function OfframpPage() {
                     </a>
                   ) : null}
                   {routeOrder ? (
-                    <OfframpRouteExpandable order={routeOrder} defaultOpen />
+                    <OfframpRouteExpandable order={routeOrder} />
                   ) : null}
                   {orderId ? (
                     <Button
@@ -922,7 +1132,7 @@ export default function OfframpPage() {
                       Settling your payout
                     </p>
                     <p className="text-sm leading-relaxed text-zinc-400">
-                      Your Lightning payment is in. Routing to IDR usually takes{" "}
+                      Your Lightning payment is in. Routing to rupiah out usually takes{" "}
                       <span className="font-semibold text-zinc-300">
                         about one to two minutes
                       </span>
@@ -930,12 +1140,12 @@ export default function OfframpPage() {
                     </p>
                     <p className="text-xs text-zinc-500">
                       Funds move through automated swaps and payout partners
-                      (Boltz, LiFi, and your chosen rail) in the background.
-                      {orderDetail?.p2pmPayoutMethod === "bank_transfer"
-                        ? " For BCA, the route reflects IDRX → IDR on your bank payout."
-                        : null}
+                      (Boltz, LiFi, IDRX) in the background.
+                      {orderDetail?.idrxPayoutBankName
+                        ? ` Your route shows IDRX → Rupiah on ${orderDetail.idrxPayoutBankName}.`
+                        : " Your route shows IDRX → Rupiah on the rail you selected."}
                       {isSwapSuccessMilestone(orderDetail)
-                        ? ` USDC swap is in — success screen in ~${Math.ceil(POST_SWAP_SUCCESS_DELAY_MS / 1000)}s…`
+                        ? ` LiFi step is in — success screen in ~${Math.ceil(POST_SWAP_SUCCESS_DELAY_MS / 1000)}s…`
                         : null}
                     </p>
                   </div>
@@ -977,7 +1187,7 @@ export default function OfframpPage() {
                     </p>
                   )}
                   {routeOrder ? (
-                    <OfframpRouteExpandable order={routeOrder} defaultOpen />
+                    <OfframpRouteExpandable order={routeOrder} />
                   ) : null}
                 </div>
               )
@@ -1035,7 +1245,7 @@ export default function OfframpPage() {
                   ) : null}
                   <p className="text-center text-xs text-zinc-500">
                     After the invoice is paid, settlement runs automatically:
-                    Lightning → stablecoins → IDR to your account.
+                    Lightning → stablecoins → rupiah out to your account.
                   </p>
                   {!paymentProofHref ? (
                     <p className="text-center text-[11px] text-zinc-500">
@@ -1082,7 +1292,7 @@ export default function OfframpPage() {
                     LiFi → Base IDRX, then burn/redeem to your payout destination.
                   </p>
                   {routeOrder ? (
-                    <OfframpRouteExpandable order={routeOrder} defaultOpen />
+                    <OfframpRouteExpandable order={routeOrder} />
                   ) : null}
                 </div>
               </>

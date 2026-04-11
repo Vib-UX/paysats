@@ -4,7 +4,7 @@ const STEPS = [
   {
     step: "1",
     title: "Set your amount",
-    body: "Choose IDR or sats. We show the live conversion so you know exactly what you are paying on LN."
+    body: "Choose rupiah out or sats in. We show the live conversion so you know exactly what you are paying on LN."
   },
   {
     step: "2",
@@ -14,12 +14,12 @@ const STEPS = [
   {
     step: "3",
     title: "We route the rails",
-    body: "Lightning: LN → USDT (Boltz) → Base. You can also fund with Bitcoin on-chain (WDK Spark deposits), or send cbBTC / BTCB to our ERC-4337 Safes — LiFi moves that liquidity to Base IDRX, then IDRX burn/redeem to IDR (BCA) or USDC + p2p.me for GoPay."
+    body: "Lightning: LN → USDT (Boltz) → Base IDRX via LiFi, then IDRX burn/redeem to Rupiah on the bank or e-wallet you pick (IDRX payout list). You can also fund with cbBTC / BTCB to ERC-4337 Safes — LiFi routes to Base IDRX the same way."
   },
   {
     step: "4",
-    title: "IDR hits your account",
-    body: "BCA: the live route shows IDRX liquidating to IDR into the account you entered. GoPay: payout lands on the number you provided. Track progress on the order status screen."
+    title: "Rupiah hits your account",
+    body: "The live route shows IDRX liquidating to Rupiah on the rail you selected (bank account or e-wallet number). Track progress on the order status screen."
   }
 ] as const;
 

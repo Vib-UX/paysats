@@ -11,7 +11,7 @@ export function MerchantCta({ className = "mt-12 scroll-mt-24" }: Props) {
         Become a merchant
       </h2>
       <p className="mt-3 text-sm leading-relaxed text-zinc-300">
-        Accept Lightning at checkout, settle to IDR, and give customers a fast path from global bitcoin liquidity to
+        Accept Lightning at checkout (sats in), settle to rupiah out, and give customers a fast path from global bitcoin liquidity to
         local payment rails. We are onboarding partners who want QRIS-ready flows and transparent settlement.
       </p>
       <a

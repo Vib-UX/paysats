@@ -47,6 +47,8 @@ export type BankIdrxBurnResult = {
 export async function runBankIdrxBurnOnly(params: {
   orderId: string;
   recipientDigits: string;
+  /** Must match redeem-request `bankName` (IDRX methods list). */
+  payoutBankName?: string;
   idrxAmountMinRaw: string;
   /** Whole IDR from offramp order (`idrAmount`); optional for scripts / tests. */
   burnAmountIdr?: number;
@@ -122,7 +124,11 @@ export async function runBankIdrxBurnOnly(params: {
   }
 
   const burnRaw = idrxHumanIdrToRaw(BigInt(burnHumanIdr), decimals);
-  const hashBinding = hashBankAccountForIdrxBurn(params.recipientDigits);
+  const payoutName = params.payoutBankName?.trim() || undefined;
+  const hashBinding = hashBankAccountForIdrxBurn(
+    params.recipientDigits,
+    payoutName,
+  );
   const { txHash, userOpHash } = await burnIdrxWithBaseWdk({
     seed,
     expectedSafeAddress: holder,
@@ -146,14 +152,16 @@ export async function runBankIdrxRedeemOnly(params: {
   recipientDigits: string;
   bankAccountName: string;
   holderAddress: string;
+  bankCode?: string;
+  bankName?: string;
 }): Promise<string | null> {
   const redeemBody = {
     txHash: params.burnTxHash,
     networkChainId: "8453",
     amountTransfer: params.amountTransfer,
     bankAccount: params.recipientDigits,
-    bankCode: idrxBcaBankCode(),
-    bankName: idrxBcaBankName(),
+    bankCode: (params.bankCode && params.bankCode.trim()) || idrxBcaBankCode(),
+    bankName: (params.bankName && params.bankName.trim()) || idrxBcaBankName(),
     bankAccountName: params.bankAccountName.trim() || "Paysats user",
     walletAddress: params.holderAddress,
   };
