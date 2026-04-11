@@ -194,8 +194,8 @@ export default function OfframpPage() {
 
   const ewalletMethods = useMemo(() => {
     const ew = idrxMethods.filter((m) => isIdrxEwalletBankCode(m.bankCode));
-    const rank = new Map(
-      EWALLET_CODE_ORDER.map((c, i) => [c, i] as const),
+    const rank = new Map<string, number>(
+      EWALLET_CODE_ORDER.map((c, i) => [c, i]),
     );
     return [...ew].sort(
       (a, b) =>
