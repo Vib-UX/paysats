@@ -218,7 +218,9 @@ export default function OfframpPage() {
   const recipientValid = useMemo(() => {
     const d = recipientNormalized;
     if (payoutIsEwallet) {
-      return /^\+\d{1,3}-\d{6,14}$/.test(d);
+      if (/^\+\d{1,3}-\d{6,14}$/.test(d)) return true;
+      const bare = digitsOnly(d);
+      return /^\d{10,15}$/.test(bare);
     }
     return d.length >= 8 && d.length <= 16;
   }, [payoutIsEwallet, recipientNormalized]);
@@ -557,7 +559,7 @@ export default function OfframpPage() {
   const primaryCurrency = activeCurrency;
   const primaryValue =
     primaryCurrency === "idr" ? formatIdrDotsFromDigits(idr) : sats;
-  const primaryLabel = primaryCurrency === "idr" ? "Rupiah out" : "Sats in";
+  const primaryLabel = primaryCurrency === "idr" ? "IDR" : "SATS";
   const secondaryPreview = useMemo(() => {
     if (!btcIdr) return null;
     const wrappedOnchain =
@@ -588,10 +590,7 @@ export default function OfframpPage() {
             <IdrxMark size={22} alt="" />
             IDRX
           </span>{" "}
-          burn and redeem to the bank or e-wallet you pick below.{" "}
-          <span className="text-zinc-300">
-            Choose from IDRX&apos;s live payout rails (BCA listed first).
-          </span>
+          burn and redeem to the bank or e-wallet you pick below.
         </p>
         <div className="mt-3 flex items-start gap-2.5 text-xs leading-relaxed text-zinc-500">
           <TetherMark size={24} className="mt-0.5" />
@@ -628,37 +627,39 @@ export default function OfframpPage() {
                 Sats in / Rupiah out
               </p>
               <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setActiveCurrency("idr");
+                      setLastEdited("idr");
+                    }}
+                    className={`tap-target rounded-full border px-4 py-3 text-sm font-extrabold uppercase tracking-wide ${
+                      primaryCurrency === "idr"
+                        ? "border-gold text-gold"
+                        : "border-border text-zinc-300"
+                    }`}
+                  >
+                    IDR
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setActiveCurrency("sats");
+                      setLastEdited("sats");
+                    }}
+                    className={`tap-target rounded-full border px-4 py-3 text-sm font-extrabold uppercase tracking-wide ${
+                      primaryCurrency === "sats"
+                        ? "border-gold text-gold"
+                        : "border-border text-zinc-300"
+                    }`}
+                  >
+                    SATS
+                  </button>
+                </div>
                 <button
                   type="button"
-                  onClick={() => {
-                    setActiveCurrency("idr");
-                    setLastEdited("idr");
-                  }}
-                  className={`tap-target rounded-full border px-4 py-3 text-sm font-extrabold uppercase tracking-wide ${
-                    primaryCurrency === "idr"
-                      ? "border-gold text-gold"
-                      : "border-border text-zinc-300"
-                  }`}
-                >
-                  Rupiah out
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setActiveCurrency("sats");
-                    setLastEdited("sats");
-                  }}
-                  className={`tap-target rounded-full border px-4 py-3 text-sm font-extrabold uppercase tracking-wide ${
-                    primaryCurrency === "sats"
-                      ? "border-gold text-gold"
-                      : "border-border text-zinc-300"
-                  }`}
-                >
-                  Sats in
-                </button>
-                <button
-                  type="button"
-                  aria-label="Swap sats in and rupiah out"
+                  aria-label="Swap between IDR and SATS entry"
                   onClick={() => {
                     const next = activeCurrency === "idr" ? "sats" : "idr";
                     setActiveCurrency(next);
@@ -744,9 +745,9 @@ export default function OfframpPage() {
                     else setSats(v);
                   }}
                   className="w-[12ch] bg-transparent text-center text-6xl font-black tracking-tight text-zinc-100 outline-none"
-                  aria-label={`${primaryLabel} amount`}
+                  aria-label={`${primaryCurrency === "idr" ? "IDR" : "SATS"} amount`}
                 />
-                <span className="text-xl font-extrabold tracking-wide text-zinc-300">
+                <span className="hidden text-xl font-extrabold tracking-wide text-zinc-300 md:inline">
                   {primaryLabel}
                 </span>
               </div>

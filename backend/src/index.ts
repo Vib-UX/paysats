@@ -321,12 +321,23 @@ function normalizeRecipientDetails(isEwallet: boolean, raw: unknown): string {
   if (!s) throw new Error("recipientDetails is required");
 
   if (isEwallet) {
-    if (!/^\+\d{1,3}-\d{6,14}$/.test(s)) {
-      throw new Error(
-        "E-wallet recipientDetails must be in +CC-NNN… format (example: +62-81234567890)",
-      );
+    /** Digits-only for IDRX redeem `bankAccount` (and burn hash); must match preimage rules. */
+    let digits: string;
+    if (/^\+\d{1,3}-\d{6,14}$/.test(s)) {
+      digits = s.replace(/\D/g, "");
+    } else {
+      const d = s.replace(/\D/g, "");
+      if (!/^\d{10,15}$/.test(d)) {
+        throw new Error(
+          "E-wallet recipientDetails must be +CC-NNN… (example: +62-81234567890) or a 10–15 digit mobile (digits only)",
+        );
+      }
+      digits = d;
     }
-    return s;
+    if (digits.length < 10 || digits.length > 15) {
+      throw new Error("E-wallet mobile number must be 10–15 digits after normalizing");
+    }
+    return digits;
   }
 
   const digits = s.replace(/[^\d]/g, "");

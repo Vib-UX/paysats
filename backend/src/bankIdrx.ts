@@ -18,6 +18,10 @@ export function hashBankAccountForIdrxBurn(
   bankName?: string,
 ): string {
   const name = (bankName && bankName.trim()) || idrxBcaBankName();
-  const acct = bankAccount.trim().replace(/\s+/g, "");
+  /** Same canonical form as redeem-request `bankAccount` (digits-only for e-wallets). */
+  const acct = bankAccount.replace(/\D/g, "");
+  if (!acct) {
+    throw new Error("bankAccount must contain at least one digit for IDRX burn binding");
+  }
   return sha256HexUtf8(`${name}_${acct}`);
 }

@@ -155,11 +155,15 @@ export async function runBankIdrxRedeemOnly(params: {
   bankCode?: string;
   bankName?: string;
 }): Promise<string | null> {
+  const bankAccount = params.recipientDigits.replace(/\D/g, "");
+  if (!bankAccount) {
+    throw new Error("recipientDigits must be a non-empty numeric string for IDRX redeem");
+  }
   const redeemBody = {
     txHash: params.burnTxHash,
     networkChainId: "8453",
     amountTransfer: params.amountTransfer,
-    bankAccount: params.recipientDigits,
+    bankAccount,
     bankCode: (params.bankCode && params.bankCode.trim()) || idrxBcaBankCode(),
     bankName: (params.bankName && params.bankName.trim()) || idrxBcaBankName(),
     bankAccountName: params.bankAccountName.trim() || "Paysats user",

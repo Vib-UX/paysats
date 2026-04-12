@@ -100,36 +100,36 @@ export function LiquidityPlatformBanner({ className = "" }: { className?: string
     <div
       className={`overflow-hidden rounded-2xl border border-border bg-gradient-to-br from-zinc-800/95 via-zinc-900/90 to-violet-950/30 ${className}`}
     >
-      <div className="flex flex-col gap-6 px-5 py-5 md:flex-row md:items-stretch md:justify-between md:gap-4 md:px-8 md:py-6">
-        <div className="flex max-w-md flex-1 items-center">
-          <p className="text-sm font-semibold leading-snug tracking-tight text-zinc-300 md:text-base">
+      <div className="flex flex-col gap-4 px-5 py-5 md:flex-row md:items-stretch md:justify-between md:gap-4 md:px-8 md:py-6">
+        <div className="flex w-full flex-1 items-center justify-center md:max-w-md md:justify-start">
+          <p className="text-center text-sm font-semibold leading-snug tracking-tight text-zinc-300 md:text-left md:text-base">
             {stats.tagline || "From sats to settled"}
           </p>
         </div>
 
         <div className="hidden w-px shrink-0 bg-zinc-600/50 md:block" aria-hidden />
 
-        <div className="flex flex-1 flex-col items-center justify-center text-center md:min-w-[10rem]">
-          <p className="text-2xl font-black tracking-tight text-violet-300 md:text-3xl">
-            {formatMillionIdrPlus(stats.totalVolumeIdr)}
-          </p>
-          <p className="mt-0.5 text-xs font-semibold text-zinc-400 md:text-sm">
-            {formatSats(stats.totalVolumeSats)}
-          </p>
-          <p className="mt-2 text-[10px] font-bold uppercase tracking-wider text-zinc-500">
-            Total volume
-          </p>
-        </div>
+        <div className="grid grid-cols-2 gap-0 md:contents">
+          <div className="flex flex-col items-center justify-center border-r border-zinc-600/50 pr-3 text-center md:min-w-[10rem] md:flex-1 md:border-r-0 md:px-4 md:pr-4">
+            <p className="text-2xl font-black tracking-tight text-violet-300 md:text-3xl">
+              {formatMillionIdrPlus(stats.totalVolumeIdr)}
+            </p>
+            <p className="mt-0.5 text-xs font-semibold text-zinc-400 md:text-sm">
+              {formatSats(stats.totalVolumeSats)}
+            </p>
+            <p className="mt-2 text-[10px] font-bold uppercase tracking-wider text-zinc-500">
+              Total volume
+            </p>
+          </div>
 
-        <div className="hidden w-px shrink-0 border-l border-dotted border-zinc-600/60 md:block" aria-hidden />
-
-        <div className="flex flex-1 flex-col items-center justify-center text-center md:min-w-[8rem]">
-          <p className="text-2xl font-black tracking-tight text-violet-300 md:text-3xl">
-            {formatOrders(stats.totalOrders)}
-          </p>
-          <p className="mt-2 text-[10px] font-bold uppercase tracking-wider text-zinc-500">
-            Total orders
-          </p>
+          <div className="flex flex-col items-center justify-center pl-3 text-center md:min-w-[8rem] md:flex-1 md:border-l md:border-dotted md:border-zinc-600/60 md:pl-4">
+            <p className="text-2xl font-black tracking-tight text-violet-300 md:text-3xl">
+              {formatOrders(stats.totalOrders)}
+            </p>
+            <p className="mt-2 text-[10px] font-bold uppercase tracking-wider text-zinc-500">
+              Total orders
+            </p>
+          </div>
         </div>
       </div>
     </div>
