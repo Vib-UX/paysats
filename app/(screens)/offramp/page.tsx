@@ -1,14 +1,8 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
-import { InvoiceQrDisplay } from "@/components/wallet/invoice-qr-display";
-import {
-  EvmDepositQrDisplay,
-  type EvmDepositInfo,
-} from "@/components/wallet/evm-deposit-qr-display";
-import { OfframpRouteExpandable } from "@/components/order/offramp-route-expandable";
 import { GiftCardsSection } from "@/components/gift-cards-section";
 import { HowItWorks } from "@/components/how-it-works";
 import { MerchantCta } from "@/components/merchant-cta";
@@ -24,40 +18,6 @@ import { TetherMark } from "@/components/tether-mark";
 import { backendFetch } from "@/lib/backend-fetch";
 import { formatSatsAsBtc } from "@/lib/format-sats-btc";
 import { isIdrxEwalletBankCode } from "@/lib/idrx-payout-classify";
-import type { OfframpOrderFields } from "@/lib/offramp-route";
-import { ORDER_STATES, type OrderState } from "@/lib/state";
-
-/** After USDT→USDC completes (swap tx link available), wait this long before showing the success checkmark. */
-const POST_SWAP_SUCCESS_DELAY_MS =
-  Number(process.env.NEXT_PUBLIC_OFFRAMP_SUCCESS_DELAY_MS || "20000") || 20_000;
-const RECEIPT_REDIRECT_AFTER_TICK_MS = 2500;
-
-const SWAP_SUCCESS_STATES = new Set<OrderState | string>([
-  "USDC_SWAPPED",
-  "P2PM_ORDER_PLACED",
-  "P2PM_ORDER_CONFIRMED",
-  "IDR_SETTLED",
-  "COMPLETED",
-]);
-
-function isSwapSuccessMilestone(
-  order: OfframpOrderFields | null | undefined,
-): boolean {
-  if (!order?.swapTxHash?.trim()) return false;
-  const st = String(order.state || "");
-  if (st === "FAILED") return false;
-  return SWAP_SUCCESS_STATES.has(st);
-}
-
-/** Third-party Lightning payment verifier (invoice + preimage). @see https://validate-payment.com/ */
-function buildValidatePaymentProofUrl(
-  invoice: string,
-  preimage: string,
-): string {
-  const pre = preimage.replace(/^0x/i, "").trim();
-  const q = new URLSearchParams({ invoice, preimage: pre });
-  return `https://validate-payment.com/?${q.toString()}`;
-}
 
 type IdrxMethodRow = {
   bankCode: string;
@@ -86,11 +46,6 @@ function defaultEwalletBankCode(methods: IdrxMethodRow[]): string {
 
 /** Single control for POST /api/offramp/create `depositChannel`. */
 type FundingSource = "lightning" | "cbbtc" | "btcb";
-type WebLnProvider = {
-  enable: () => Promise<void>;
-  sendPayment: (bolt11: string) => Promise<{ preimage?: string }>;
-};
-
 function digitsOnly(s: string): string {
   return s.replace(/[^\d]/g, "");
 }
@@ -121,20 +76,6 @@ function formatIdrDotsFromDigits(digits: string): string {
   return d.replace(/\B(?=(\d{3})+(?!\d))/g, ".");
 }
 
-function indexOfOrderState(state: string): number {
-  const i = ORDER_STATES.indexOf(state as OrderState);
-  return i;
-}
-
-/** Funding Lightning invoice is settled; agent pipeline is running or finished. */
-function isFundingInvoiceSettled(order: OfframpOrderFields | null): boolean {
-  if (!order) return false;
-  if (order.invoicePaidAt) return true;
-  const i = indexOfOrderState(String(order.state || "ROUTE_SHOWN"));
-  const routeShown = ORDER_STATES.indexOf("ROUTE_SHOWN");
-  return i > routeShown;
-}
-
 export default function OfframpPage() {
   const router = useRouter();
 
@@ -157,28 +98,9 @@ export default function OfframpPage() {
 
   const [loadingPay, setLoadingPay] = useState(false);
   const [error, setError] = useState("");
-  const [bolt11, setBolt11] = useState<string | null>(null);
-  const [depositInfo, setDepositInfo] = useState<EvmDepositInfo | null>(null);
   const [fundingSource, setFundingSource] = useState<FundingSource>("lightning");
-  const [orderId, setOrderId] = useState<string | null>(null);
-  const [invoiceOpen, setInvoiceOpen] = useState(false);
-  const [invoicePaying, setInvoicePaying] = useState(false);
-  const [orderDetail, setOrderDetail] = useState<OfframpOrderFields | null>(
-    null,
-  );
-  /** Set when WebLN returns a preimage — used for validate-payment.com proof link. */
-  const [lightningPaymentPreimage, setLightningPaymentPreimage] = useState<
-    string | null
-  >(null);
-  /** Shown after POST_SWAP_SUCCESS_DELAY_MS once swap tx is available (see poll). */
-  const [showPaymentSuccess, setShowPaymentSuccess] = useState(false);
 
   const [section, setSection] = useState<OfframpSection>("pay");
-
-  const paymentSuccessDelayStartedRef = useRef(false);
-  const paymentSuccessTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
-    null,
-  );
 
   const idrNum = useMemo(() => Number(digitsOnly(idr) || "0"), [idr]);
   const satsNum = useMemo(() => Number(digitsOnly(sats) || "0"), [sats]);
@@ -361,7 +283,6 @@ export default function OfframpPage() {
 
   useEffect(() => {
     if (!btcIdr) return;
-    if (bolt11) return;
 
     if (lastEdited === "idr") {
       const nextSats = Math.max(1, Math.ceil((idrNum / btcIdr) * 1e8));
@@ -370,34 +291,11 @@ export default function OfframpPage() {
       const nextIdr = Math.max(0, Math.floor((satsNum / 1e8) * btcIdr));
       setIdr(String(nextIdr));
     }
-  }, [btcIdr, idrNum, satsNum, bolt11, lastEdited]);
-
-  async function payViaWebln(invoice: string): Promise<{ preimage?: string }> {
-    const provider = (window as unknown as { webln?: WebLnProvider }).webln;
-    if (!provider) {
-      throw new Error(
-        "WebLN not available. Install/enable Alby or pay using the QR in another wallet.",
-      );
-    }
-    await provider.enable();
-    return provider.sendPayment(invoice);
-  }
+  }, [btcIdr, idrNum, satsNum, lastEdited]);
 
   const onPay = async () => {
     setError("");
     setLoadingPay(true);
-    setBolt11(null);
-    setDepositInfo(null);
-    setOrderId(null);
-    setOrderDetail(null);
-    setLightningPaymentPreimage(null);
-    setShowPaymentSuccess(false);
-    paymentSuccessDelayStartedRef.current = false;
-    if (paymentSuccessTimerRef.current) {
-      clearTimeout(paymentSuccessTimerRef.current);
-      paymentSuccessTimerRef.current = null;
-    }
-    setInvoiceOpen(false);
     try {
       const idrxBankName = selectedIdrxMethod?.bankName?.trim() ?? "";
       if (!idrxBankCode || !idrxBankName) {
@@ -429,132 +327,13 @@ export default function OfframpPage() {
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Failed to create invoice.");
-      if (data.bolt11) {
-        setBolt11(String(data.bolt11));
-        setDepositInfo(null);
-      } else {
-        setBolt11(null);
-        setDepositInfo(data.deposit && typeof data.deposit === "object" ? (data.deposit as EvmDepositInfo) : null);
-      }
-      setOrderId(String(data.orderId));
-      setInvoiceOpen(true);
+      router.push(`/order/${encodeURIComponent(String(data.orderId))}`);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to create invoice.");
     } finally {
       setLoadingPay(false);
     }
   };
-
-  useEffect(() => {
-    if (!invoiceOpen) {
-      setShowPaymentSuccess(false);
-      paymentSuccessDelayStartedRef.current = false;
-      if (paymentSuccessTimerRef.current) {
-        clearTimeout(paymentSuccessTimerRef.current);
-        paymentSuccessTimerRef.current = null;
-      }
-    }
-  }, [invoiceOpen]);
-
-  useEffect(() => {
-    if (!orderId || !invoiceOpen) return;
-    const oid = orderId;
-
-    let cancelled = false;
-
-    async function poll() {
-      try {
-        const res = await backendFetch(
-          `/api/order/${encodeURIComponent(oid)}/status`,
-        );
-        if (!res.ok || cancelled) return;
-        const data = await res.json();
-        if (cancelled) return;
-        const snapshot = data as OfframpOrderFields;
-        setOrderDetail(snapshot);
-
-        if (
-          isSwapSuccessMilestone(snapshot) &&
-          !paymentSuccessDelayStartedRef.current
-        ) {
-          paymentSuccessDelayStartedRef.current = true;
-          paymentSuccessTimerRef.current = setTimeout(() => {
-            if (cancelled) return;
-            setShowPaymentSuccess(true);
-          }, POST_SWAP_SUCCESS_DELAY_MS);
-        }
-      } catch {
-        /* ignore transient network errors */
-      }
-    }
-
-    void poll();
-    const id = setInterval(poll, 2500);
-    return () => {
-      cancelled = true;
-      clearInterval(id);
-      if (paymentSuccessTimerRef.current) {
-        clearTimeout(paymentSuccessTimerRef.current);
-        paymentSuccessTimerRef.current = null;
-      }
-    };
-  }, [orderId, invoiceOpen, router]);
-
-  useEffect(() => {
-    if (!showPaymentSuccess || orderDetail?.state !== "COMPLETED" || !orderId)
-      return;
-    const oid = orderId;
-    const t = setTimeout(() => {
-      router.push(`/receipt?orderId=${encodeURIComponent(oid)}`);
-    }, RECEIPT_REDIRECT_AFTER_TICK_MS);
-    return () => clearTimeout(t);
-  }, [showPaymentSuccess, orderDetail?.state, orderId, router]);
-
-  const fundingSettled =
-    orderDetail &&
-    isFundingInvoiceSettled(orderDetail) &&
-    orderDetail.state !== "FAILED" &&
-    orderDetail.state !== "COMPLETED";
-  const pipelineFailed = orderDetail?.state === "FAILED";
-
-  /** Merge live bolt11, WebLN preimage, and form payout hints until API snapshot catches up. */
-  const routeOrder: OfframpOrderFields | null = useMemo(() => {
-    if (!orderDetail && !bolt11 && !depositInfo) return null;
-    const base =
-      orderDetail ?? ({ state: "ROUTE_SHOWN" } as OfframpOrderFields);
-    return {
-      ...base,
-      invoiceBolt11: base.invoiceBolt11 || bolt11 || undefined,
-      invoiceLnPreimage:
-        lightningPaymentPreimage?.trim() || base.invoiceLnPreimage || undefined,
-      p2pmPayoutMethod: base.p2pmPayoutMethod || "bank_transfer",
-      idrxPayoutBankCode:
-        base.idrxPayoutBankCode || idrxBankCode || undefined,
-      idrxPayoutBankName:
-        base.idrxPayoutBankName ||
-        selectedIdrxMethod?.bankName ||
-        undefined,
-      payoutRecipient: base.payoutRecipient || recipientNormalized || undefined,
-      depositChannel: base.depositChannel ?? depositInfo?.channel ?? undefined,
-      depositChainId: base.depositChainId ?? depositInfo?.chainId ?? undefined,
-      depositTokenAddress:
-        base.depositTokenAddress ?? depositInfo?.tokenAddress ?? undefined,
-      depositToAddress: base.depositToAddress ?? depositInfo?.toAddress ?? undefined,
-    };
-  }, [
-    orderDetail,
-    bolt11,
-    depositInfo,
-    lightningPaymentPreimage,
-    idrxBankCode,
-    selectedIdrxMethod?.bankName,
-    recipientNormalized,
-  ]);
-
-  const paymentProofHref =
-    bolt11 && lightningPaymentPreimage
-      ? buildValidatePaymentProofUrl(bolt11, lightningPaymentPreimage)
-      : null;
 
   const primaryCurrency = activeCurrency;
   const primaryValue =
@@ -996,315 +775,6 @@ export default function OfframpPage() {
         </footer>
       ) : null}
 
-      {invoiceOpen && (bolt11 || depositInfo) ? (
-        <div
-          role="dialog"
-          aria-modal="true"
-          className="fixed inset-0 z-50 flex items-end justify-center bg-black/70 p-4 backdrop-blur sm:items-center"
-        >
-          <div className="w-full max-w-md space-y-4 rounded-2xl border border-border bg-zinc-950 p-4 shadow-2xl">
-            <div className="flex items-center justify-between">
-              <p className="text-sm font-bold text-zinc-200">
-                {depositInfo
-                  ? `Deposit ${depositInfo.tokenSymbol} (${depositInfo.chainName})`
-                  : "Pay with Lightning"}
-              </p>
-              <button
-                type="button"
-                onClick={() => setInvoiceOpen(false)}
-                className="tap-target rounded-lg px-3 py-2 text-sm font-bold text-zinc-300 hover:text-white"
-              >
-                Close
-              </button>
-            </div>
-
-            {pipelineFailed ? (
-              <div className="space-y-4 py-2 text-center">
-                <p className="text-sm font-bold text-red-400">
-                  Something went wrong
-                </p>
-                <p className="text-sm text-zinc-400">
-                  The order did not complete. You can view details on the status
-                  page or contact support with your order ID.
-                </p>
-                {orderId ? (
-                  <Button
-                    type="button"
-                    onClick={() =>
-                      router.push(
-                        `/status?orderId=${encodeURIComponent(orderId)}`,
-                      )
-                    }
-                    className="gold-gradient"
-                  >
-                    View status
-                  </Button>
-                ) : null}
-                {paymentProofHref ? (
-                  <a
-                    href={paymentProofHref}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="block text-center text-sm font-bold text-gold underline underline-offset-4"
-                  >
-                    Lightning payment proof
-                  </a>
-                ) : null}
-              </div>
-            ) : fundingSettled && bolt11?.startsWith("ln") ? (
-              showPaymentSuccess ? (
-                <div className="space-y-5 py-6 text-center">
-                  <div
-                    className="mx-auto grid h-20 w-20 place-items-center rounded-full bg-gold/20 text-gold"
-                    aria-hidden
-                  >
-                    <svg
-                      className="h-11 w-11"
-                      viewBox="0 0 24 24"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="2.5"
-                    >
-                      <path
-                        d="M20 6L9 17l-5-5"
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                      />
-                    </svg>
-                  </div>
-                  <div>
-                    <p className="text-xl font-black text-zinc-100">
-                      Payment successful
-                    </p>
-                    <p className="mt-2 text-sm leading-relaxed text-zinc-400">
-                      Lightning payment and on-chain swap are complete
-                      {orderDetail?.state === "COMPLETED"
-                        ? " — redirecting to receipt…"
-                        : "."}
-                    </p>
-                  </div>
-                  {orderDetail?.swapTxHash ? (
-                    <a
-                      href={`https://arbiscan.io/tx/${orderDetail.swapTxHash}`}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="inline-flex text-sm font-bold text-gold underline underline-offset-4"
-                    >
-                      View USDT → USDC transaction
-                    </a>
-                  ) : null}
-                  {paymentProofHref ? (
-                    <a
-                      href={paymentProofHref}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="block text-sm font-bold text-zinc-400 underline hover:text-gold"
-                    >
-                      Lightning payment proof
-                    </a>
-                  ) : null}
-                  {routeOrder ? (
-                    <OfframpRouteExpandable order={routeOrder} />
-                  ) : null}
-                  {orderId ? (
-                    <Button
-                      type="button"
-                      onClick={() =>
-                        router.push(
-                          `/status?orderId=${encodeURIComponent(orderId)}`,
-                        )
-                      }
-                      className="border border-border bg-transparent text-zinc-200"
-                    >
-                      Order details
-                    </Button>
-                  ) : null}
-                </div>
-              ) : (
-                <div className="space-y-5 py-4 text-center">
-                  <div className="mx-auto flex h-16 w-16 items-center justify-center">
-                    <div
-                      className="h-14 w-14 rounded-full border-4 border-zinc-700 border-t-gold animate-spin"
-                      aria-hidden
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <p className="text-base font-black text-zinc-100">
-                      Settling your payout
-                    </p>
-                    <p className="text-sm leading-relaxed text-zinc-400">
-                      Your Lightning payment is in. Routing to rupiah out usually takes{" "}
-                      <span className="font-semibold text-zinc-300">
-                        about one to two minutes
-                      </span>
-                      .
-                    </p>
-                    <p className="text-xs text-zinc-500">
-                      Funds move through automated swaps and payout partners
-                      (Boltz, LiFi, IDRX) in the background.
-                      {orderDetail?.idrxPayoutBankName
-                        ? ` Your route shows IDRX → Rupiah on ${orderDetail.idrxPayoutBankName}.`
-                        : " Your route shows IDRX → Rupiah on the rail you selected."}
-                      {isSwapSuccessMilestone(orderDetail)
-                        ? ` LiFi step is in — success screen in ~${Math.ceil(POST_SWAP_SUCCESS_DELAY_MS / 1000)}s…`
-                        : null}
-                    </p>
-                  </div>
-                  {orderId ? (
-                    <button
-                      type="button"
-                      onClick={() =>
-                        router.push(
-                          `/status?orderId=${encodeURIComponent(orderId)}`,
-                        )
-                      }
-                      className="tap-target w-full rounded-xl px-4 py-3 text-sm font-bold text-zinc-400 transition hover:text-zinc-200"
-                    >
-                      Detailed progress
-                    </button>
-                  ) : null}
-                  {paymentProofHref ? (
-                    <a
-                      href={paymentProofHref}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="block text-center text-sm font-bold text-gold underline decoration-gold/40 underline-offset-4 hover:decoration-gold"
-                    >
-                      Lightning payment proof (validate-payment.com)
-                    </a>
-                  ) : (
-                    <p className="text-center text-[11px] text-zinc-500">
-                      Paid with another wallet? Copy the preimage from your
-                      wallet and verify at{" "}
-                      <a
-                        href="https://validate-payment.com/"
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="font-semibold text-zinc-400 underline hover:text-gold"
-                      >
-                        validate-payment.com
-                      </a>
-                      .
-                    </p>
-                  )}
-                  {routeOrder ? (
-                    <OfframpRouteExpandable order={routeOrder} />
-                  ) : null}
-                </div>
-              )
-            ) : bolt11?.startsWith("ln") ? (
-              <>
-                <InvoiceQrDisplay
-                  bolt11={bolt11}
-                  amountSats={Number(digitsOnly(sats) || "0") || undefined}
-                />
-
-                <div className="space-y-2">
-                  <Button
-                    type="button"
-                    loading={invoicePaying}
-                    disabled={!bolt11.startsWith("ln")}
-                    onClick={() => {
-                      setError("");
-                      setInvoicePaying(true);
-                      payViaWebln(bolt11)
-                        .then((res) => {
-                          const pre = res?.preimage?.trim();
-                          if (pre) setLightningPaymentPreimage(pre);
-                        })
-                        .catch((e) =>
-                          setError(e instanceof Error ? e.message : String(e)),
-                        )
-                        .finally(() => setInvoicePaying(false));
-                    }}
-                    className="border border-gold bg-transparent text-gold hover:bg-gold/10"
-                  >
-                    Pay with Alby (WebLN)
-                  </Button>
-                  {paymentProofHref ? (
-                    <a
-                      href={paymentProofHref}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="tap-target flex w-full items-center justify-center rounded-xl border border-gold/40 bg-black/20 px-4 py-3 text-sm font-bold text-gold"
-                    >
-                      Open payment proof
-                    </a>
-                  ) : null}
-                  {orderId ? (
-                    <Button
-                      type="button"
-                      onClick={() =>
-                        router.push(
-                          `/status?orderId=${encodeURIComponent(orderId)}`,
-                        )
-                      }
-                      className="gold-gradient"
-                    >
-                      View status
-                    </Button>
-                  ) : null}
-                  <p className="text-center text-xs text-zinc-500">
-                    After the invoice is paid, settlement runs automatically:
-                    Lightning → stablecoins → rupiah out to your account.
-                  </p>
-                  {!paymentProofHref ? (
-                    <p className="text-center text-[11px] text-zinc-500">
-                      After paying in any wallet, you can prove the payment at{" "}
-                      <a
-                        href="https://validate-payment.com/"
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="font-semibold text-zinc-400 underline hover:text-gold"
-                      >
-                        validate-payment.com
-                      </a>{" "}
-                      using your invoice and preimage.
-                    </p>
-                  ) : null}
-                  {routeOrder ? (
-                    <OfframpRouteExpandable order={routeOrder} />
-                  ) : null}
-                </div>
-              </>
-            ) : depositInfo ? (
-              <>
-                <EvmDepositQrDisplay
-                  deposit={depositInfo}
-                  satAmount={satsNum > 0 ? satsNum : undefined}
-                  idrAmount={idrNum > 0 ? idrNum : undefined}
-                />
-                <div className="space-y-2">
-                  {orderId ? (
-                    <Button
-                      type="button"
-                      onClick={() =>
-                        router.push(
-                          `/status?orderId=${encodeURIComponent(orderId)}`,
-                        )
-                      }
-                      className="gold-gradient"
-                    >
-                      View status
-                    </Button>
-                  ) : null}
-                  <p className="text-center text-xs text-zinc-500">
-                    After your on-chain deposit confirms, the operator route runs
-                    LiFi → Base IDRX, then burn/redeem to your payout destination.
-                  </p>
-                  {routeOrder ? (
-                    <OfframpRouteExpandable order={routeOrder} />
-                  ) : null}
-                </div>
-              </>
-            ) : (
-              <p className="text-center text-sm text-red-400">
-                Missing deposit instructions. Close and try again.
-              </p>
-            )}
-          </div>
-        </div>
-      ) : null}
     </main>
   );
 }
