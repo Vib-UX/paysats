@@ -16,7 +16,6 @@ import {
   lookupSparkInvoice,
   paySparkInvoice,
   paySparkInvoiceWithRetries,
-  getSparkBalance,
   type SparkInvoiceResult,
 } from "./spark.js";
 import { prisma } from "./prisma.js";
@@ -101,11 +100,6 @@ function isDbAccessError(err: unknown): boolean {
 
 function nowIso(): string {
   return new Date().toISOString();
-}
-
-function isNwcTimeout(err: unknown): boolean {
-  const msg = err instanceof Error ? err.message : String(err);
-  return msg.toLowerCase().includes("reply timeout") || msg.includes("Nip47ReplyTimeoutError");
 }
 
 function makeStubInvoice(): { bolt11: string; expiresAt: number } {

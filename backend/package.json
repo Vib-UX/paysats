@@ -27,7 +27,6 @@
     "prisma:migrate:deploy": "prisma migrate deploy"
   },
   "dependencies": {
-    "@getalby/sdk": "^7.0.0",
     "@prisma/client": "^6.5.0",
     "@tetherto/wdk-wallet-evm-erc-4337": "^1.0.0-beta.5",
     "@tetherto/wdk-wallet-spark": "^1.0.0-beta.17",
@@ -37,8 +36,7 @@
     "ethers": "^6.16.0",
     "express": "^4.21.2",
     "patchright": "^1.52.5",
-    "prisma": "^6.5.0",
-    "websocket-polyfill": "^0.0.3"
+    "prisma": "^6.5.0"
   },
   "devDependencies": {
     "@types/cors": "^2.8.17",
