@@ -1,0 +1,55 @@
+{
+  "name": "@paysats/sdk",
+  "version": "0.1.0",
+  "description": "Client SDK for paysats — Lightning → IDR off-ramp (Indonesia). Add LN/cbBTC/BTCB → bank payouts to any Node app in ~10 lines.",
+  "license": "MIT",
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "build": "tsup src/index.ts --format cjs,esm --dts --clean --sourcemap",
+    "dev": "tsup src/index.ts --format cjs,esm --dts --watch",
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "paysats",
+    "lightning",
+    "bitcoin",
+    "offramp",
+    "idr",
+    "indonesia",
+    "idrx",
+    "sdk",
+    "boltz",
+    "lifi"
+  ],
+  "devDependencies": {
+    "tsup": "^8.3.5",
+    "typescript": "^5.8.3"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/paysats/paysats.git",
+    "directory": "sdk"
+  },
+  "homepage": "https://paysats.io",
+  "publishConfig": {
+    "access": "public"
+  }
+}
