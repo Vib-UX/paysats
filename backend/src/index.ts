@@ -10,7 +10,15 @@ import { deriveBaseErc4337ReceiveAddress } from "./baseErc4337Address.js";
 import { deriveBscErc4337ReceiveAddress } from "./bscErc4337Address.js";
 import { createBoltzSwap, getBoltzSwapStatus } from "./boltz.js";
 import { log } from "./logger.js";
-import { createInvoice, initNwc, payInvoice, payInvoiceWithRetries } from "./nwc.js";
+import {
+  initSpark,
+  createSparkInvoice,
+  lookupSparkInvoice,
+  paySparkInvoice,
+  paySparkInvoiceWithRetries,
+  getSparkBalance,
+  type SparkInvoiceResult,
+} from "./spark.js";
 import { prisma } from "./prisma.js";
 import { OrderState, requireTransition } from "./state.js";
 import {
@@ -54,6 +62,7 @@ type MemoryOrder = {
   p2pmPayoutMethod?: string | null;
   payoutRecipient?: string | null;
   invoiceBolt11?: string | null;
+  invoiceLnId?: string | null;
   invoiceExpiresAt?: string | null;
   invoicePaidAt?: string | null;
   invoicePaymentHash?: string | null;
@@ -179,14 +188,13 @@ async function fetchBtcIdrQuoteCached(): Promise<{ btcIdr: number; usdcIdr: numb
   return q;
 }
 
-function requireNwcUrl(): string {
-  const url = process.env.NWC_URL?.trim();
-  if (!url) {
-    log.error("nwc", "NWC_URL missing", undefined);
-    throw new Error("NWC_URL is not configured on the server.");
+function requireWdkSeed(): string {
+  const seed = process.env.WDK_SEED?.trim();
+  if (!seed) {
+    log.error("spark", "WDK_SEED missing", undefined);
+    throw new Error("WDK_SEED is not configured on the server.");
   }
-  log.info("nwc", "using NWC_URL from env", { nwcUrl: log.redactNwcUrl(url) });
-  return url;
+  return seed;
 }
 
 async function advanceOrderState(orderId: string, next: OrderState) {
@@ -362,6 +370,7 @@ const offrampWatchers = new Map<string, true>();
 async function watchInvoiceAndRunOfframpPipeline(params: {
   orderId: string;
   bolt11: string;
+  invoiceLnId: string;
   satAmount: number;
   recipientDetails: string;
   bankAccountName: string;
@@ -384,13 +393,11 @@ async function watchInvoiceAndRunOfframpPipeline(params: {
     });
     logArbitrumAgentAddresses(params.orderId);
 
-    const nwcUrl = requireNwcUrl();
-    const { client, balanceSats, balanceRaw, walletAlias } = await initNwc(nwcUrl);
-    log.info("pipeline", "NWC operator wallet (pays Boltz / makes invoices)", {
+    const wdkSeed = requireWdkSeed();
+    const spark = await initSpark(wdkSeed);
+    log.info("pipeline", "Spark operator wallet (pays Boltz / makes invoices)", {
       orderId: params.orderId,
-      walletAlias: walletAlias ?? "(unknown)",
-      balanceSats,
-      balanceMsat: balanceRaw
+      balanceSats: spark.balanceSats,
     });
 
     const startedAt = Date.now();
@@ -405,18 +412,17 @@ async function watchInvoiceAndRunOfframpPipeline(params: {
       }
       const state = (o as any).state as OrderState;
       const invoicePaidAt = (o as any).invoicePaidAt ?? null;
-      const invoicePaymentHash = (o as any).invoicePaymentHash ?? null;
       if (state === "FAILED" || state === "COMPLETED") {
         log.info("pipeline", "stopped invoice wait — terminal order state", { orderId: params.orderId, state });
         return;
       }
       if (invoicePaidAt) break;
 
-      let inv: any;
+      let lookupResult: { paid: boolean; raw: any };
       try {
-        inv = await (client as any).lookupInvoice({ invoice: params.bolt11 });
+        lookupResult = await lookupSparkInvoice(spark.account, params.invoiceLnId);
       } catch (e) {
-        log.warn("pipeline", "lookupInvoice failed (will retry)", {
+        log.warn("pipeline", "lookupSparkInvoice failed (will retry)", {
           orderId: params.orderId,
           pollCount,
           error: e instanceof Error ? e.message : String(e)
@@ -424,28 +430,13 @@ async function watchInvoiceAndRunOfframpPipeline(params: {
         await delay(3000);
         continue;
       }
-      const paid = Boolean(inv?.paid || inv?.settled_at || inv?.settledAt);
-      const paymentHash = typeof inv?.payment_hash === "string" ? inv.payment_hash : null;
-      log.info("pipeline", "funding invoice poll (lookupInvoice)", {
+      log.info("pipeline", "funding invoice poll (Spark getLightningReceiveRequest)", {
         orderId: params.orderId,
         pollCount,
-        paid,
-        paymentHashPrefix: paymentHash ? paymentHash.slice(0, 16) + "…" : null,
-        amountMsat: inv?.amount ?? inv?.amount_msat ?? undefined
+        paid: lookupResult.paid,
       });
 
-      if (paymentHash && !invoicePaymentHash) {
-        const mem = memoryOrders.get(params.orderId);
-        if (mem) {
-          memoryOrders.set(params.orderId, { ...mem, invoicePaymentHash: paymentHash, updatedAt: nowIso() });
-        } else {
-          await prisma.order
-            .update({ where: { id: params.orderId }, data: { invoicePaymentHash: paymentHash } as any })
-            .catch(() => {});
-        }
-      }
-
-      if (paid) {
+      if (lookupResult.paid) {
         const mem = memoryOrders.get(params.orderId);
         if (mem) {
           memoryOrders.set(params.orderId, { ...mem, invoicePaidAt: nowIso(), updatedAt: nowIso() });
@@ -457,7 +448,6 @@ async function watchInvoiceAndRunOfframpPipeline(params: {
         log.info("pipeline", "funding invoice settled by user", {
           orderId: params.orderId,
           pollCount,
-          preimageLen: typeof inv?.preimage === "string" ? inv.preimage.length : undefined
         });
         await advanceOrderState(params.orderId, "LN_INVOICE_PAID");
         break;
@@ -533,31 +523,30 @@ async function watchInvoiceAndRunOfframpPipeline(params: {
       }
     }
 
-    log.info("pipeline", "paying Boltz Lightning invoice via NWC (operator wallet)", {
+    log.info("pipeline", "paying Boltz Lightning invoice via Spark (operator wallet)", {
       orderId: params.orderId,
       boltzInvoiceLen: boltz.invoice.length
     });
-    // NWC balance can lag behind invoice settlement; wait/poll before paying the Boltz invoice.
-    const balanceBufferSats = Math.max(0, Number(process.env.NWC_PAY_BALANCE_BUFFER_SATS || "50") || 50);
-    const waitForBalanceMs = Math.max(0, Number(process.env.NWC_WAIT_FOR_BALANCE_MS || "60000") || 60_000);
-    const balancePollMs = Math.max(250, Number(process.env.NWC_BALANCE_POLL_MS || "1500") || 1500);
+    const balanceBufferSats = Math.max(0, Number(process.env.SPARK_PAY_BALANCE_BUFFER_SATS || "50") || 50);
+    const waitForBalanceMs = Math.max(0, Number(process.env.SPARK_WAIT_FOR_BALANCE_MS || "60000") || 60_000);
+    const balancePollMs = Math.max(250, Number(process.env.SPARK_BALANCE_POLL_MS || "1500") || 1500);
+    const maxFeeSats = Math.max(0, Number(process.env.SPARK_PAY_MAX_FEE_SATS || "1000") || 1000);
     const minBalanceSats = Math.max(0, Math.ceil(Number(boltz.satsAmount || 0))) + balanceBufferSats;
     log.info("pipeline", "pre-pay balance guard for Boltz invoice", {
       orderId: params.orderId,
       minBalanceSats,
       balanceBufferSats,
       waitForBalanceMs,
-      balancePollMs
+      balancePollMs,
+      maxFeeSats
     });
-    const seed = process.env.WDK_SEED?.trim();
     const confirmMaxWaitMs = Math.max(0, Number(process.env.BOLTZ_USDT_CONFIRM_MAX_WAIT_MS || "240000") || 240_000);
     const confirmPollMs = Math.max(500, Number(process.env.BOLTZ_USDT_CONFIRM_POLL_MS || "5000") || 5_000);
     let startUsdtRaw: bigint | undefined = undefined;
-    if (seed) {
-      // Best-effort starting balance snapshot so we can detect an actual increase.
+    {
       const start = await waitForArbitrumUsdtBalance({
         orderId: params.orderId,
-        seed,
+        seed: wdkSeed,
         maxWaitMs: 1,
         pollMs: 1
       });
@@ -566,88 +555,59 @@ async function watchInvoiceAndRunOfframpPipeline(params: {
         orderId: params.orderId,
         usdtRaw: startUsdtRaw.toString()
       });
-    } else {
-      log.warn("pipeline", "WDK_SEED missing; cannot confirm Boltz success via Arbitrum USDT balance", {
-        orderId: params.orderId
-      });
     }
 
-    let boltzLnPreimage: string | null = null;
     try {
-      const boltzPay = await payInvoiceWithRetries({
-        nwcUrl,
+      const boltzPay = await paySparkInvoiceWithRetries({
+        seed: wdkSeed,
         bolt11: boltz.invoice,
-        maxAttempts: Number(process.env.NWC_PAY_MAX_ATTEMPTS || "3") || 3,
-        baseDelayMs: Number(process.env.NWC_PAY_BASE_DELAY_MS || "1500") || 1500,
+        maxAttempts: Number(process.env.SPARK_PAY_MAX_ATTEMPTS || "3") || 3,
+        baseDelayMs: Number(process.env.SPARK_PAY_BASE_DELAY_MS || "1500") || 1500,
         minBalanceSats,
         waitForBalanceMs,
-        balancePollMs
+        balancePollMs,
+        maxFeeSats,
+        boltzSwapId: boltz.swapId,
+        startUsdtRaw,
       });
-      boltzLnPreimage = (boltzPay.preimage && String(boltzPay.preimage).trim()) || null;
-      log.info("pipeline", "Boltz Lightning invoice paid", {
+      log.info("pipeline", "Boltz Lightning invoice paid via Spark", {
         orderId: params.orderId,
-        preimageLen: boltzPay.preimage?.length ?? 0,
-        feesPaid: boltzPay.feesPaid,
-        attempts: (boltzPay as any).attempts ?? null
+        payId: boltzPay.id,
+        status: boltzPay.status,
+        attempts: boltzPay.attempts,
       });
     } catch (e) {
-      // Sometimes pay_invoice times out but the payment still succeeded. Confirm by watching Arbitrum USDT balance.
-      log.warn("pipeline", "pay_invoice failed; attempting Arbitrum USDT confirmation", {
+      log.warn("pipeline", "Spark pay_invoice failed; attempting Arbitrum USDT confirmation", {
         orderId: params.orderId,
         error: e instanceof Error ? e.message : String(e),
         confirmMaxWaitMs,
         confirmPollMs
       });
-      if (seed) {
-        const confirmed = await waitForArbitrumUsdtBalance({
+      const confirmed = await waitForArbitrumUsdtBalance({
+        orderId: params.orderId,
+        seed: wdkSeed,
+        startBalanceRaw: startUsdtRaw,
+        maxWaitMs: confirmMaxWaitMs,
+        pollMs: confirmPollMs
+      });
+      if (confirmed.satisfied) {
+        log.info("pipeline", "Boltz success confirmed via Arbitrum USDT balance (despite pay_invoice error)", {
           orderId: params.orderId,
-          seed,
-          startBalanceRaw: startUsdtRaw,
-          maxWaitMs: confirmMaxWaitMs,
-          pollMs: confirmPollMs
+          usdtRaw: confirmed.balanceRaw.toString()
         });
-        if (confirmed.satisfied) {
-          log.info("pipeline", "Boltz success confirmed via Arbitrum USDT balance (despite pay_invoice error)", {
-            orderId: params.orderId,
-            usdtRaw: confirmed.balanceRaw.toString()
-          });
-        } else {
-          throw e;
-        }
       } else {
         throw e;
       }
     }
 
-    if (boltzLnPreimage) {
-      const mem = memoryOrders.get(params.orderId);
-      if (mem) {
-        memoryOrders.set(params.orderId, {
-          ...mem,
-          boltzLnPreimage,
-          boltzLnInvoice: mem.boltzLnInvoice || boltz.invoice,
-          updatedAt: nowIso()
-        });
-      } else {
-        await prisma.order
-          .update({
-            where: { id: params.orderId },
-            data: { boltzLnPreimage, boltzLnInvoice: boltz.invoice }
-          })
-          .catch(() => {});
-      }
-    }
-
-    // Also do a best-effort confirmation even on success, to catch cases where NWC returned ok but routing is delayed.
-    if (seed) {
-      await waitForArbitrumUsdtBalance({
-        orderId: params.orderId,
-        seed,
-        startBalanceRaw: startUsdtRaw,
-        maxWaitMs: confirmMaxWaitMs,
-        pollMs: confirmPollMs
-      }).catch(() => {});
-    }
+    // Best-effort confirmation even on success to catch routing delays.
+    await waitForArbitrumUsdtBalance({
+      orderId: params.orderId,
+      seed: wdkSeed,
+      startBalanceRaw: startUsdtRaw,
+      maxWaitMs: confirmMaxWaitMs,
+      pollMs: confirmPollMs
+    }).catch(() => {});
     await advanceOrderState(params.orderId, "USDT_RECEIVED");
 
     const fromAmountMinUnits = String(
@@ -857,14 +817,12 @@ async function watchInvoiceAndRunOfframpPipeline(params: {
 
 app.get("/api/nwc/balance", async (_req, res) => {
   try {
-    log.info("api", "GET /api/nwc/balance");
-    const nwcUrl = requireNwcUrl();
-    const { balanceSats, balanceRaw, walletAlias } = await initNwc(nwcUrl);
+    log.info("api", "GET /api/nwc/balance (Spark)");
+    const seed = requireWdkSeed();
+    const { balanceSats } = await initSpark(seed);
     return res.json({
       balanceSats,
-      balanceMsat: balanceRaw,
-      walletAlias: walletAlias ?? null,
-      hint: "balance from NWC get_balance (NIP-47 millisats → sats) for the wallet in NWC_URL"
+      hint: "balance from Spark getBalance (sats) for the wallet derived from WDK_SEED"
     });
   } catch (error) {
     log.error("api", "GET /api/nwc/balance failed", error);
@@ -957,22 +915,21 @@ app.get("/api/offramp/routed-snapshots", async (_req, res) => {
 
 app.post("/api/nwc/create-invoice", async (req, res) => {
   try {
-    log.info("api", "POST /api/nwc/create-invoice", { body: { ...req.body, nwcUrl: undefined } });
+    log.info("api", "POST /api/nwc/create-invoice (Spark)", { body: req.body });
     const amountSats = Number(req.body.amountSats || 0);
     const description = String(req.body.description || "paysats topup");
     if (amountSats <= 0) {
       return res.status(400).json({ error: "amountSats is required and must be positive" });
     }
 
-    const nwcUrl = requireNwcUrl();
-    const { client, balanceSats, balanceRaw, walletAlias } = await initNwc(nwcUrl);
-    const invoice = await createInvoice(client, amountSats, description);
-    log.info("api", "create-invoice success", { amountSats, balanceSats, balanceMsat: balanceRaw, walletAlias });
+    const seed = requireWdkSeed();
+    const { account, balanceSats } = await initSpark(seed);
+    const invoice = await createSparkInvoice(account, amountSats, description);
+    log.info("api", "create-invoice success (Spark)", { amountSats, balanceSats });
     return res.json({
-      ...invoice,
+      bolt11: invoice.bolt11,
+      invoiceId: invoice.invoiceId,
       balanceSats,
-      balanceMsat: balanceRaw,
-      walletAlias: walletAlias ?? null
     });
   } catch (error) {
     log.error("api", "POST /api/nwc/create-invoice failed", error);
@@ -1143,28 +1100,23 @@ app.post("/api/offramp/create", async (req, res) => {
       });
     }
 
-    let client: Awaited<ReturnType<typeof initNwc>>["client"] | null = null;
-    let invoice: { bolt11: string; expiresAt?: number };
+    let invoice: SparkInvoiceResult;
+    let sparkReady = false;
     try {
-      const nwcUrl = requireNwcUrl();
-      const nwc = await initNwc(nwcUrl);
-      client = nwc.client;
-      invoice = await createInvoice(
-        client,
+      const seed = requireWdkSeed();
+      const { account } = await initSpark(seed);
+      invoice = await createSparkInvoice(
+        account,
         satAmount,
-        `paysats offramp ${idrAmount.toLocaleString("id-ID")} IDR (${idrxBankName})`
+        `paysats offramp ${idrAmount.toLocaleString("id-ID")} IDR (${idrxBankName})`,
       );
+      sparkReady = true;
     } catch (e) {
       if (process.env.ALLOW_STUB_INVOICE === "1") {
-        log.warn("nwc", "NWC unavailable; using stub invoice (ALLOW_STUB_INVOICE=1)", {
-          error: e instanceof Error ? e.message : String(e)
+        log.warn("spark", "Spark unavailable; using stub invoice (ALLOW_STUB_INVOICE=1)", {
+          error: e instanceof Error ? e.message : String(e),
         });
-        invoice = makeStubInvoice();
-      } else if (isNwcTimeout(e)) {
-        return res.status(503).json({
-          error:
-            "Lightning wallet (NWC_URL) did not respond in time. Check relay connectivity and that the wallet is online."
-        });
+        invoice = { bolt11: makeStubInvoice().bolt11, invoiceId: "" };
       } else {
         throw e;
       }
@@ -1185,9 +1137,9 @@ app.post("/api/offramp/create", async (req, res) => {
           payoutRecipient: recipientDetails,
           bankAccountName,
           invoiceBolt11: invoice.bolt11,
-          invoiceExpiresAt: invoice.expiresAt ? new Date(invoice.expiresAt * 1000) : null,
-          merchantName: "Offramp"
-        } as any
+          invoiceLnId: invoice.invoiceId || null,
+          merchantName: "Offramp",
+        } as any,
       });
       orderId = order.id;
     } catch (e) {
@@ -1207,7 +1159,7 @@ app.post("/api/offramp/create", async (req, res) => {
         payoutRecipient: recipientDetails,
         bankAccountName,
         invoiceBolt11: invoice.bolt11,
-        invoiceExpiresAt: invoice.expiresAt ? new Date(invoice.expiresAt * 1000).toISOString() : null,
+        invoiceLnId: invoice.invoiceId || null,
         createdAt,
         updatedAt: createdAt,
         completedAt: null,
@@ -1220,30 +1172,30 @@ app.post("/api/offramp/create", async (req, res) => {
         swapTxHash: null,
         p2pmOrderId: null,
         usdtAmount: null,
-        usdcAmount: null
+        usdcAmount: null,
       });
       log.warn("db", "DB unavailable; using in-memory order store", { orderId });
     }
 
-    // Kick off background watcher: once invoice is paid, agents run the pipeline.
-    if (client && invoice.bolt11 && invoice.bolt11.startsWith("ln")) {
+    if (sparkReady && invoice.bolt11 && invoice.bolt11.startsWith("ln") && invoice.invoiceId) {
       log.info("pipeline", "offramp order created — background watcher will run after response", {
         orderId,
         satAmount,
         idrAmount,
-        invoicePrefix: invoice.bolt11.slice(0, 28) + (invoice.bolt11.length > 28 ? "…" : "")
+        invoicePrefix: invoice.bolt11.slice(0, 28) + (invoice.bolt11.length > 28 ? "…" : ""),
       });
       watchInvoiceAndRunOfframpPipeline({
         orderId,
         bolt11: invoice.bolt11,
+        invoiceLnId: invoice.invoiceId,
         satAmount,
         recipientDetails,
         bankAccountName,
         idrxPayoutBankCode: idrxBankCode,
         idrxPayoutBankName: idrxBankName,
       }).catch((e) => log.error("pipeline", "watcher crashed (unhandled)", e, { orderId }));
-    } else if (!client) {
-      log.warn("pipeline", "Not starting invoice watcher (stub invoice or no NWC client)", { orderId });
+    } else if (!sparkReady) {
+      log.warn("pipeline", "Not starting invoice watcher (stub invoice or Spark unavailable)", { orderId });
     }
 
     return res.json({
@@ -1253,7 +1205,6 @@ app.post("/api/offramp/create", async (req, res) => {
       idrAmount,
       btcIdr,
       fetchedAt,
-      invoiceExpiresAt: invoice.expiresAt ?? null
     });
   } catch (error) {
     log.error("api", "POST /api/offramp/create failed", error);
@@ -1263,17 +1214,18 @@ app.post("/api/offramp/create", async (req, res) => {
 
 app.post("/api/nwc/pay-invoice", async (req, res) => {
   try {
-    log.info("api", "POST /api/nwc/pay-invoice", {
-      bolt11Prefix: String(req.body.bolt11 || "").slice(0, 20)
+    log.info("api", "POST /api/nwc/pay-invoice (Spark)", {
+      bolt11Prefix: String(req.body.bolt11 || "").slice(0, 20),
     });
     const bolt11 = String(req.body.bolt11 || "");
     if (!bolt11) {
       return res.status(400).json({ error: "bolt11 is required" });
     }
-    const nwcUrl = requireNwcUrl();
-    const { client } = await initNwc(nwcUrl);
-    const payment = await payInvoice(client, bolt11);
-    log.info("api", "pay-invoice success", { preimageLen: payment.preimage?.length });
+    const maxFeeSats = Number(req.body.maxFeeSats || process.env.SPARK_PAY_MAX_FEE_SATS || 1000) || 1000;
+    const seed = requireWdkSeed();
+    const { account } = await initSpark(seed);
+    const payment = await paySparkInvoice(account, bolt11, maxFeeSats);
+    log.info("api", "pay-invoice success (Spark)", { id: payment.id, status: payment.status });
     return res.json(payment);
   } catch (error) {
     log.error("api", "POST /api/nwc/pay-invoice failed", error);
@@ -1493,42 +1445,38 @@ app.post("/api/boltz/create-swap", async (req, res) => {
     await advanceOrderState(order.id, "QR_SCANNED");
     await advanceOrderState(order.id, "ROUTE_SHOWN");
 
-    const nwcForPay = process.env.NWC_URL?.trim();
-    if (nwcForPay) {
-      log.info("api", "paying Boltz Lightning invoice via NWC", {
+    const wdkSeedForPay = process.env.WDK_SEED?.trim();
+    if (wdkSeedForPay) {
+      log.info("api", "paying Boltz Lightning invoice via Spark", {
         orderId: order.id,
         swapId: swap.swapId,
-        boltzInvoiceLen: swap.invoice.length
+        boltzInvoiceLen: swap.invoice.length,
       });
-      const balanceBufferSats = Math.max(0, Number(process.env.NWC_PAY_BALANCE_BUFFER_SATS || "50") || 50);
-      const waitForBalanceMs = Math.max(0, Number(process.env.NWC_WAIT_FOR_BALANCE_MS || "60000") || 60_000);
-      const balancePollMs = Math.max(250, Number(process.env.NWC_BALANCE_POLL_MS || "1500") || 1500);
+      const balanceBufferSats = Math.max(0, Number(process.env.SPARK_PAY_BALANCE_BUFFER_SATS || "50") || 50);
+      const waitForBalanceMs = Math.max(0, Number(process.env.SPARK_WAIT_FOR_BALANCE_MS || "60000") || 60_000);
+      const balancePollMs = Math.max(250, Number(process.env.SPARK_BALANCE_POLL_MS || "1500") || 1500);
+      const maxFeeSats = Math.max(0, Number(process.env.SPARK_PAY_MAX_FEE_SATS || "1000") || 1000);
       const minBalanceSats = Math.max(0, Math.ceil(Number((swap as any).satsAmount || satAmount || 0))) + balanceBufferSats;
-      log.info("api", "pre-pay balance guard for Boltz invoice", {
-        orderId: order.id,
-        minBalanceSats,
-        balanceBufferSats,
-        waitForBalanceMs,
-        balancePollMs
-      });
-      const payResult = await payInvoiceWithRetries({
-        nwcUrl: nwcForPay,
+      const payResult = await paySparkInvoiceWithRetries({
+        seed: wdkSeedForPay,
         bolt11: swap.invoice,
-        maxAttempts: Number(process.env.NWC_PAY_MAX_ATTEMPTS || "3") || 3,
-        baseDelayMs: Number(process.env.NWC_PAY_BASE_DELAY_MS || "1500") || 1500,
+        maxAttempts: Number(process.env.SPARK_PAY_MAX_ATTEMPTS || "3") || 3,
+        baseDelayMs: Number(process.env.SPARK_PAY_BASE_DELAY_MS || "1500") || 1500,
         minBalanceSats,
         waitForBalanceMs,
-        balancePollMs
+        balancePollMs,
+        maxFeeSats,
+        boltzSwapId: swap.swapId,
       });
-      log.info("api", "Boltz invoice paid", {
+      log.info("api", "Boltz invoice paid via Spark", {
         orderId: order.id,
-        preimageLen: payResult.preimage?.length ?? 0,
-        feesPaid: payResult.feesPaid,
-        attempts: (payResult as any).attempts ?? null
+        payId: payResult.id,
+        status: payResult.status,
+        attempts: payResult.attempts,
       });
       await advanceOrderState(order.id, "LN_INVOICE_PAID");
     } else {
-      log.warn("api", "NWC_URL not set; skipping automatic boltz invoice payment");
+      log.warn("api", "WDK_SEED not set; skipping automatic boltz invoice payment");
     }
 
     await advanceOrderState(order.id, "BOLTZ_SWAP_PENDING");

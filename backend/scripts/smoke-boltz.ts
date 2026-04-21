@@ -5,7 +5,7 @@
 import "dotenv/config";
 import { createBoltzSwap } from "../src/boltz.js";
 import { requireArbitrumReceiveAddress } from "../src/arbitrumErc4337Address.js";
-import { initNwc, payInvoice } from "../src/nwc.js";
+import { initSpark, paySparkInvoice } from "../src/spark.js";
 
 const SATS = Number(process.env.SMOKE_SATS || 1000);
 
@@ -24,16 +24,17 @@ async function main() {
   console.log("invoice prefix:", swap.invoice.slice(0, 40) + "…");
   console.log("satsAmount:", swap.satsAmount, "usdtAmount:", swap.usdtAmount);
 
-  const nwc = process.env.NWC_URL?.trim();
-  if (!nwc) {
-    console.log("\nNWC_URL not set — skipping pay_invoice.");
+  const seed = process.env.WDK_SEED?.trim();
+  if (!seed) {
+    console.log("\nWDK_SEED not set — skipping pay_invoice.");
     return;
   }
 
-  const { client } = await initNwc(nwc);
-  console.log("\nPaying invoice via NWC...");
-  const paid = await payInvoice(client, swap.invoice);
-  console.log("Paid, preimage length:", paid.preimage?.length);
+  const { account } = await initSpark(seed);
+  console.log("\nPaying invoice via Spark...");
+  const maxFeeSats = Number(process.env.SPARK_PAY_MAX_FEE_SATS || "1000") || 1000;
+  const paid = await paySparkInvoice(account, swap.invoice, maxFeeSats);
+  console.log("Paid, id:", paid.id, "status:", paid.status);
 }
 
 main().catch((e) => {

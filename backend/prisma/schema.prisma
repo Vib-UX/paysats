@@ -55,6 +55,8 @@ model Order {
   /** IDRX redeem-request API data.id when returned. */
   idrxRedeemId     String?
   invoiceBolt11    String?
+  /** Spark LightningReceiveRequest id — used to poll payment status via getLightningReceiveRequest. */
+  invoiceLnId      String?
   /** lightning | cbbtc | btcb — when set, user funds via wrapped BTC to EVM Safe instead of LN invoice. */
   depositChannel     String?
   depositChainId     Int?
