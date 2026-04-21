@@ -1,6 +1,6 @@
 {
   "name": "@paysats/sdk",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Official Node client for paysats — Bitcoin to Indonesian Rupiah (bank or e-wallet).",
   "license": "MIT",
   "type": "module",
@@ -40,12 +40,7 @@
     "tsup": "^8.3.5",
     "typescript": "^5.8.3"
   },
-  "repository": {
-    "type": "git",
-    "url": "https://github.com/paysats/paysats.git",
-    "directory": "sdk"
-  },
-  "homepage": "https://paysats.io",
+  "homepage": "https://paysats.exchange",
   "publishConfig": {
     "access": "public"
   }
