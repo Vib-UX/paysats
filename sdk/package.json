@@ -1,7 +1,7 @@
 {
   "name": "@paysats/sdk",
-  "version": "0.1.0",
-  "description": "Client SDK for paysats — Lightning → IDR off-ramp (Indonesia). Add LN/cbBTC/BTCB → bank payouts to any Node app in ~10 lines.",
+  "version": "0.1.1",
+  "description": "Official Node client for paysats — Bitcoin to Indonesian Rupiah (bank or e-wallet).",
   "license": "MIT",
   "type": "module",
   "main": "./dist/index.cjs",
@@ -34,10 +34,7 @@
     "offramp",
     "idr",
     "indonesia",
-    "idrx",
-    "sdk",
-    "boltz",
-    "lifi"
+    "sdk"
   ],
   "devDependencies": {
     "tsup": "^8.3.5",
