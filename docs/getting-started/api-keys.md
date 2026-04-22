@@ -9,12 +9,12 @@ icon: key
 
 PaySats uses a **single tenant API key** as the credential across every integration surface:
 
-* The HTTP `/v1` API — sent as `Authorization: Bearer <key>`
-* `@paysats/sdk` — passed to `new PaysatsClient({ apiKey })`
-* `@paysats/mcp` — read from the `PAYSATS_API_KEY` env var
+* The HTTP `/v1` API, sent as `Authorization: Bearer <key>`
+* `@paysats/sdk`, passed to `new PaysatsClient({ apiKey })`
+* `@paysats/mcp`, read from the `PAYSATS_API_KEY` env var
 
 {% hint style="danger" %}
-**Never** ship an API key in a browser bundle, mobile binary, or public MCP configuration. All three surfaces are designed to be called from a **server you control**. The key authenticates **you**, the tenant — not an end user.
+**Never** ship an API key in a browser bundle, mobile binary, or public MCP configuration. All three surfaces are designed to be called from a **server you control**. The key authenticates **you** (the tenant), not an end user.
 {% endhint %}
 
 ## Format
@@ -31,12 +31,16 @@ pk_live_xxxxxxxxxxxx.xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 
 ## Getting a key
 
-PaySats is currently in **private beta**. Request a tenant API key at <code class="expression">space.vars.support_email</code> and include:
+{% hint style="success" %}
+**Ping us on Telegram at [@vibcrypto](https://t.me/vibcrypto).** Fastest way to get a tenant API key during private beta.
+{% endhint %}
+
+PaySats is currently in **private beta**. To request a tenant API key, message [@vibcrypto](https://t.me/vibcrypto) on Telegram or email <code class="expression">space.vars.support_email</code>. Include:
 
 * The product / app you're integrating
-* Expected monthly volume (approx IDR)
+* Expected monthly volume (approx local fiat)
 * Which rails you need (Lightning, cbBTC, BTCB)
-* Whether you want **BCA / bank** or **e-wallet** payouts (or both)
+* Whether you want **bank** or **e-wallet** payouts (or both), and the target market (Indonesia / India / other)
 
 ## Where to store it
 
@@ -74,7 +78,7 @@ In `~/.cursor/mcp.json` or `claude_desktop_config.json`, under `env`:
 }
 ```
 
-The file is read only by your local MCP client — it never leaves your machine.
+The file is read only by your local MCP client. It never leaves your machine.
 {% endtab %}
 
 {% tab title="Railway / Docker" %}
@@ -103,7 +107,7 @@ It **cannot**:
 ## Rotating and revoking
 
 * Key rotation is handled by PaySats ops via the backend `key:rotate` / `key:revoke` commands.
-* If a key leaks, email <code class="expression">space.vars.support_email</code> from the account of record — we revoke and reissue.
+* If a key leaks, ping us on Telegram at [@vibcrypto](https://t.me/vibcrypto) or email <code class="expression">space.vars.support_email</code> from the account of record. We revoke and reissue.
 * Losing a secret is recoverable (rotate); losing the key ID is not sensitive.
 
 Next: [Quickstart](quickstart.md) · [HTTP API /v1](../developers/http-api.md)

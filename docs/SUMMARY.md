@@ -15,8 +15,8 @@
 ## Developers
 
 * [Overview](developers/README.md)
-* [SDK — @paysats/sdk](developers/sdk.md)
-* [MCP server — @paysats/mcp](developers/mcp-server.md)
+* [SDK: @paysats/sdk](developers/sdk.md)
+* [MCP server: @paysats/mcp](developers/mcp-server.md)
 * [HTTP API /v1](developers/http-api.md)
 * [Order lifecycle](developers/order-lifecycle.md)
 * [Deposit rails](developers/deposit-rails.md)

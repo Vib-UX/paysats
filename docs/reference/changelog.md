@@ -16,7 +16,7 @@ Versions follow the npm packages. Breaking changes bump the major. API `/v1` end
 ## Documentation launch
 
 * Published this GitBook with product overview, SDK / MCP / HTTP references, order-lifecycle guide, deposit-rails and payout-methods pages, and a worked end-to-end example.
-* Added **"Why PaySats"** — P2P scam exposure, bank-account freezes, and manual-exchange pain as motivation.
+* Added **"Why PaySats"** covering P2P scam exposure, bank-account freezes, and manual-exchange pain as motivation.
 * Architecture page is intentionally locked at a high level; deeper internals will ship incrementally.
 {% endupdate %}
 
@@ -45,7 +45,7 @@ Versions follow the npm packages. Breaking changes bump the major. API `/v1` end
 {% endupdate %}
 
 {% update date="2025-03" %}
-## `/v1` API, tenant-scoped
+## `/v1` API: tenant-scoped
 
 * Launched `/v1/quote/btc-idr`, `/v1/payout/methods`, `/v1/deposit/rails`, `/v1/platform/stats`, and the off-ramp order endpoints.
 * All endpoints gated by tenant API keys (`x-api-key` or `Authorization: Bearer`).
@@ -60,4 +60,4 @@ Versions follow the npm packages. Breaking changes bump the major. API `/v1` end
 * **Gift cards and e-vouchers** via the custom P2P merchant network.
 * **Multi-tenant OAuth on the MCP edge** (today every MCP HTTP deployment is single-tenant, keyed by env var).
 
-Have a request or want early access? Email <code class="expression">space.vars.support_email</code>.
+Have a request or want early access? Ping us on Telegram at [@vibcrypto](https://t.me/vibcrypto) or email <code class="expression">space.vars.support_email</code>.
