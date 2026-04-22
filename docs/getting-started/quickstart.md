@@ -27,7 +27,7 @@ Requires **Node 18+** (for native `fetch`).
 {% step %}
 ## Set your API key
 
-Put your tenant key in an environment variable — don't commit it.
+Put your tenant key in an environment variable. Don't commit it.
 
 ```bash
 export PAYSATS_API_KEY="pk_live_xxxxxxxxxxxx.xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
@@ -39,7 +39,7 @@ Need one? See [API keys](api-keys.md).
 {% step %}
 ## List payout methods
 
-Always pull the live list — bank codes and e-wallet availability change.
+Always pull the live list. Bank codes and e-wallet availability change.
 
 ```ts
 import { PaysatsClient } from "@paysats/sdk";
@@ -58,7 +58,7 @@ See [Payout methods](../developers/payout-methods.md) for the shape and how bank
 {% step %}
 ## Create an off-ramp order
 
-Pick **either** `satAmount` **or** `idrAmount` — the server computes the other side from the locked quote.
+Pick **either** `satAmount` **or** `idrAmount`. The server computes the other side from the locked quote.
 
 ```ts
 const order = await client.createOfframpOrder({
@@ -95,7 +95,7 @@ if (final.state === "COMPLETED") {
 }
 ```
 
-`waitForOrder` polls every 5 s by default with a 30-minute timeout — see [Order lifecycle](../developers/order-lifecycle.md) for the full state list.
+`waitForOrder` polls every 5 s by default with a 30-minute timeout. See [Order lifecycle](../developers/order-lifecycle.md) for the full state list.
 {% endstep %}
 {% endstepper %}
 

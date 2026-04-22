@@ -7,7 +7,7 @@ icon: timeline
 
 # Order lifecycle
 
-Every off-ramp order progresses through a deterministic set of **states** from creation to settlement. Drive UI off `order.state` — never off intermediate fields like `boltzSwapId` or `idrxBurnTxHash`.
+Every off-ramp order progresses through a deterministic set of **states** from creation to settlement. Drive UI off `order.state`, never off intermediate fields like `boltzSwapId` or `idrxBurnTxHash`.
 
 ## States
 
@@ -31,18 +31,18 @@ type OrderState =
 | State | Meaning | Typical fields populated |
 |-------|---------|--------------------------|
 | `IDLE` | Order created, not yet paid | `invoiceBolt11` (LN) or `depositToAddress` (EVM), `invoiceExpiresAt` |
-| `NWC_CONNECTED` | Nostr Wallet Connect handshake done (client-driven flow) | — |
-| `QR_SCANNED` | User has scanned a QRIS target (QRIS flow) | — |
+| `NWC_CONNECTED` | Nostr Wallet Connect handshake done (client-driven flow) | (none) |
+| `QR_SCANNED` | User has scanned a QRIS target (QRIS flow) | (none) |
 | `ROUTE_SHOWN` | Route preview displayed to the user | `satAmount`, `idrAmount`, `btcIdr` |
 | `LN_INVOICE_PAID` | Lightning invoice settled | `invoicePaidAt`, `invoiceLnId` |
 | `BOLTZ_SWAP_PENDING` | LN → USDT swap in-flight on Boltz | `boltzSwapId`, `boltzLnInvoice` |
 | `USDT_RECEIVED` | Operator smart account received USDT (Arbitrum) | `boltzTxHash` |
 | `USDC_SWAPPED` | Internal routing hop completed (where applicable) | `swapTxHash` |
-| `P2PM_ORDER_PLACED` | P2P merchant order placed (gift-card / P2P rail) | — |
-| `P2PM_ORDER_CONFIRMED` | P2P merchant confirmed | — |
+| `P2PM_ORDER_PLACED` | P2P merchant order placed (gift-card / P2P rail) | (none) |
+| `P2PM_ORDER_CONFIRMED` | P2P merchant confirmed | (none) |
 | `IDR_SETTLED` | IDRX burn + redeem submitted to payout partner | `idrxBurnTxHash`, `idrxRedeemId` |
 | `COMPLETED` | Terminal. IDR credited to the named bank / e-wallet | `completedAt` |
-| `FAILED` | Terminal. Any irrecoverable failure along the path | — |
+| `FAILED` | Terminal. Any irrecoverable failure along the path | (none) |
 
 {% hint style="success" %}
 **Terminal: `COMPLETED`.** Funds are settled at the payout partner; bank / e-wallet credit is either done or in the partner's queue (typically minutes, occasionally longer for bank-side delays).
@@ -140,7 +140,7 @@ If you already have a frontend that polls on its own, just call `GET /v1/offramp
 | Mobile (battery-sensitive) | 8–15 seconds |
 
 {% hint style="warning" %}
-Don't poll faster than **1 request per second per order** — the tenant-scoped rate limiter will start rejecting. If you're seeing many orders at once, batch with `GET /v1/offramp/orders?limit=` instead.
+Don't poll faster than **1 request per second per order**. The tenant-scoped rate limiter will start rejecting. If you're seeing many orders at once, batch with `GET /v1/offramp/orders?limit=` instead.
 {% endhint %}
 
 ## Driving UI
@@ -148,15 +148,15 @@ Don't poll faster than **1 request per second per order** — the tenant-scoped 
 | State | Suggested UI |
 |-------|--------------|
 | `IDLE`, `ROUTE_SHOWN` | Show the BOLT11 QR / EVM deposit instructions and the locked `idrAmount`. |
-| `LN_INVOICE_PAID` | "Payment received — processing settlement..." |
+| `LN_INVOICE_PAID` | "Payment received, processing settlement..." |
 | `BOLTZ_SWAP_PENDING`, `USDT_RECEIVED`, `USDC_SWAPPED`, `IDR_SETTLED` | Progress spinner with step indicator; expose `orderId` for support. |
-| `COMPLETED` | Success screen — show `completedAt`, masked `payoutRecipient`, and the payout `bankName`. |
-| `FAILED` | Failure screen — surface the last-known state from `onUpdate` and a support link with `orderId`. |
+| `COMPLETED` | Success screen. Show `completedAt`, masked `payoutRecipient`, and the payout `bankName`. |
+| `FAILED` | Failure screen. Surface the last-known state from `onUpdate` and a support link with `orderId`. |
 
 ## Idempotency and retries
 
 * **Do not** retry `POST /v1/offramp/orders` on network errors without first reconciling via `GET /v1/offramp/orders?limit=`.
-* Once an order leaves `IDLE`, transitions are driven server-side — clients only read state.
+* Once an order leaves `IDLE`, transitions are driven server-side; clients only read state.
 * Failed orders are **not** auto-retried. A fresh `createOfframpOrder` call is required, with new deposit instructions.
 
 Next: [Deposit rails](deposit-rails.md) · [Payout methods](payout-methods.md) · [Example end-to-end flow](../reference/example-flow.md)

@@ -1,6 +1,6 @@
 ---
 description: >-
-  High-level view of how a BTC payment becomes IDR on a bank account or
+  High-level view of how a BTC payment becomes local fiat on a bank account or
   e-wallet. Internals are intentionally locked at this stage.
 icon: diagram-project
 ---
@@ -8,7 +8,7 @@ icon: diagram-project
 # How it works
 
 {% hint style="info" %}
-This page is intentionally a **high-level overview**. Internal routing, fee policy, liquidity pool layout, and provider-level detail are locked at this stage — deeper developer material will be published as PaySats matures.
+This page is intentionally a **high-level overview**. Internal routing, fee policy, liquidity pool layout, and provider-level detail are locked at this stage, deeper developer material will be published as PaySats matures.
 {% endhint %}
 
 ## End-to-end, in one picture
@@ -74,9 +74,9 @@ As a developer you only interact with **one API** and **one SDK call**. Everythi
 | **Payout discovery** | `listPayoutMethods()` | Live list of banks + e-wallets with `bankCode` / `bankName` |
 | **Order creation** | `createOfframpOrder({ idrAmount, depositChannel, ... })` | Lock quote, derive deposit target, return BOLT11 or deposit instructions |
 | **Payment** | Payer pays BOLT11 or sends on-chain BTC / cbBTC / BTCB | Server watches invoice / deposit address, starts swap pipeline |
-| **Swap** | — | LN → USDT via Boltz, or wrapped BTC → IDRX via LiFi |
-| **Settle** | — | USDT → IDRX, then IDRX burn + redeem |
-| **Payout** | — | IDRX partner credits BCA bank or e-wallet |
+| **Swap** | (server-side) | LN → USDT via Boltz, or wrapped BTC → IDRX via LiFi |
+| **Settle** | (server-side) | USDT → IDRX, then IDRX burn + redeem |
+| **Payout** | (server-side) | IDRX partner credits BCA bank or e-wallet |
 | **Status** | `getOrder()` or `waitForOrder()` | Deterministic state transitions up to `COMPLETED` / `FAILED` |
 
 See [Order lifecycle](../developers/order-lifecycle.md) for the full state machine.

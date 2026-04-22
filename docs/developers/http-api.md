@@ -1,6 +1,6 @@
 ---
 description: >-
-  Raw HTTP /v1 API reference for PaySats — quotes, payout methods, deposit
+  Raw HTTP /v1 API reference for PaySats. Quotes, payout methods, deposit
   rails, and the off-ramp order lifecycle. With curl, SDK, and TypeScript
   examples.
 icon: server
@@ -86,7 +86,7 @@ type BtcIdrQuote = {
 
 ### `GET /v1/payout/methods`
 
-Live list of banks and e-wallets. **Call this before every `POST /v1/offramp/orders`** — do not hard-code `bankCode`.
+Live list of banks and e-wallets. **Call this before every `POST /v1/offramp/orders`**. Do not hard-code `bankCode`.
 
 {% tabs %}
 {% tab title="curl" %}
@@ -211,7 +211,7 @@ type PlatformStats = {
 };
 ```
 
-Shape is a loose superset — additional metrics may appear. Always branch on the keys you care about.
+Shape is a loose superset. Additional metrics may appear. Always branch on the keys you care about.
 {% endtab %}
 {% endtabs %}
 
@@ -385,6 +385,6 @@ If the database is transiently unavailable, this endpoint returns `{ "orders": [
 
 ## Idempotency
 
-Order creation is **not** idempotency-keyed today. Don't retry `POST /v1/offramp/orders` blindly on network errors — check `GET /v1/offramp/orders` with a tight `limit` to confirm whether your previous attempt succeeded.
+Order creation is **not** idempotency-keyed today. Don't retry `POST /v1/offramp/orders` blindly on network errors. Check `GET /v1/offramp/orders` with a tight `limit` to confirm whether your previous attempt succeeded.
 
 Next: [Order lifecycle](order-lifecycle.md) · [Deposit rails](deposit-rails.md) · [Payout methods](payout-methods.md)

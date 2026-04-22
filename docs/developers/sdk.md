@@ -1,11 +1,11 @@
 ---
 description: >-
-  @paysats/sdk — typed Node client for the PaySats API. Quotes, payout methods,
-  off-ramp orders, and order polling.
+  "@paysats/sdk" is a typed Node client for the PaySats API. Quotes, payout
+  methods, off-ramp orders, and order polling.
 icon: js
 ---
 
-# SDK — @paysats/sdk
+# SDK: @paysats/sdk
 
 Typed Node client for the PaySats API. Handles auth, request/response shapes, and terminal-state polling.
 
@@ -36,7 +36,7 @@ const client = new PaysatsClient({
 
 | Option | Type | Default | Notes |
 |--------|------|---------|-------|
-| `apiKey` | `string` | — | **Required.** Tenant API key. |
+| `apiKey` | `string` | (required) | **Required.** Tenant API key. |
 | `baseUrl` | `string` | `https://api.paysats.io` | Point at a self-hosted backend. |
 | `timeoutMs` | `number` | `30000` | Per-request timeout. |
 | `fetch` | `typeof fetch` | global `fetch` | Override for Node <18 or testing. |
@@ -54,7 +54,7 @@ const q = await client.getBtcIdrQuote();
 
 ### `listPayoutMethods()`
 
-Returns the live list of supported banks and e-wallets. Always call this before `createOfframpOrder` — **never hard-code** bank codes.
+Returns the live list of supported banks and e-wallets. Always call this before `createOfframpOrder`, **never hard-code** bank codes.
 
 ```ts
 const methods = await client.listPayoutMethods();
@@ -76,7 +76,7 @@ See [Payout methods](payout-methods.md) for bank vs e-wallet rules.
 
 ### `getDepositRails()`
 
-Returns the operator's configured deposit targets — Lightning availability and the per-chain ERC-4337 safe addresses for `cbbtc` / `btcb` deposits.
+Returns the operator's configured deposit targets: Lightning availability and the per-chain ERC-4337 safe addresses for `cbbtc` / `btcb` deposits.
 
 ```ts
 const rails = await client.getDepositRails();
@@ -115,7 +115,7 @@ Response:
 ```ts
 type OfframpCreateResponse = {
   orderId: string;
-  bolt11: string | null;       // null for cbBTC / BTCB — use `deposit` instead
+  bolt11: string | null;       // null for cbBTC / BTCB, use `deposit` instead
   satAmount: number;
   idrAmount: number;
   btcIdr: number;
@@ -135,7 +135,7 @@ type OfframpCreateResponse = {
 ```
 
 {% hint style="warning" %}
-`idrxBankCode` and `idrxBankName` **must come from `listPayoutMethods()`** — they're validated server-side and must match as a pair. Invalid combinations return HTTP 400.
+`idrxBankCode` and `idrxBankName` **must come from `listPayoutMethods()`**, they're validated server-side and must match as a pair. Invalid combinations return HTTP 400.
 {% endhint %}
 
 ### `getOrder(orderId)`
@@ -174,8 +174,8 @@ Options:
 |--------|------|---------|
 | `pollMs` | `number` | `5000` |
 | `timeoutMs` | `number` | `1_800_000` (30 min) |
-| `onUpdate` | `(order) => void` | — (fires on every poll, including first hit) |
-| `signal` | `AbortSignal` | — |
+| `onUpdate` | `(order) => void` | (none) (fires on every poll, including first hit) |
+| `signal` | `AbortSignal` | (none) |
 
 Behaviour:
 
@@ -258,11 +258,11 @@ try {
 
 Common statuses:
 
-* **400** — validation (e.g. missing `idrxBankCode`, unsupported `depositChannel`, bad `recipientDetails`)
-* **401** — missing or invalid API key
-* **404** — `getOrder` on an ID that doesn't belong to this tenant
-* **408** — `waitForOrder` timeout
-* **503** — database unavailable (transient)
+* **400**: validation (e.g. missing `idrxBankCode`, unsupported `depositChannel`, bad `recipientDetails`)
+* **401**: missing or invalid API key
+* **404**: `getOrder` on an ID that doesn't belong to this tenant
+* **408**: `waitForOrder` timeout
+* **503**: database unavailable (transient)
 
 ## Idiomatic patterns
 
@@ -311,7 +311,7 @@ try {
 
 <summary>Why the SDK uses <code>x-api-key</code> instead of <code>Authorization: Bearer</code></summary>
 
-Both headers are accepted by the API (<code class="expression">space.vars.api_base_url</code>). The SDK sends `x-api-key` by default because it survives more proxy / CDN middlewares unchanged, and it's unambiguous — no risk of accidentally mixing with an OAuth bearer token from another provider in the same process. The backend normalises both internally.
+Both headers are accepted by the API (<code class="expression">space.vars.api_base_url</code>). The SDK sends `x-api-key` by default because it survives more proxy / CDN middlewares unchanged, and it's unambiguous: no risk of accidentally mixing with an OAuth bearer token from another provider in the same process. The backend normalises both internally.
 
 </details>
 

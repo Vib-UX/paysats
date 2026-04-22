@@ -1,12 +1,12 @@
 ---
 description: >-
-  @paysats/mcp — Model Context Protocol server that lets Cursor, Claude
+  "@paysats/mcp" is a Model Context Protocol server that lets Cursor, Claude
   Desktop, Claude web, and other MCP clients quote, list, and create PaySats
   off-ramp orders.
 icon: plug
 ---
 
-# MCP server — @paysats/mcp
+# MCP server: @paysats/mcp
 
 [Model Context Protocol](https://modelcontextprotocol.io) server that wraps `@paysats/sdk` so a connected LLM can:
 
@@ -49,10 +49,10 @@ Every HTTP deployment **requires** `Authorization: Bearer <PAYSATS_MCP_HTTP_TOKE
 
 | Variable | Required | Default | Notes |
 |----------|----------|---------|-------|
-| `PAYSATS_API_KEY` | yes | — | Tenant API key (`pk_live_...`). See [API keys](../getting-started/api-keys.md). |
+| `PAYSATS_API_KEY` | yes | (none) | Tenant API key (`pk_live_...`). See [API keys](../getting-started/api-keys.md). |
 | `PAYSATS_BASE_URL` | no | `https://api.paysats.io` | Point at a self-hosted backend when needed. |
 | `PAYSATS_MCP_TRANSPORT` | no | `stdio` | `stdio` or `http`. |
-| `PAYSATS_MCP_HTTP_TOKEN` | yes for `http` | — | Bearer token required by the HTTP transport. |
+| `PAYSATS_MCP_HTTP_TOKEN` | yes for `http` | (none) | Bearer token required by the HTTP transport. |
 | `PAYSATS_MCP_HOST` | no | `127.0.0.1` | Use `0.0.0.0` on Railway / containers. |
 | `PAYSATS_MCP_PORT` / `PORT` | no | `3333` | Railway sets `PORT` automatically and it takes precedence. |
 | `PAYSATS_MCP_ALLOWED_HOSTS` | no | any | Comma-separated allowlist for the `Host` header (DNS-rebinding protection). |
@@ -154,7 +154,7 @@ with `Authorization: Bearer <issued-token>`. Multi-tenant OAuth on the MCP edge 
 ## Expected client flow
 
 {% hint style="success" %}
-This is the flow encoded in the server's `instructions` string — clients will follow it by default.
+This is the flow encoded in the server's `instructions` string. Clients will follow it by default.
 {% endhint %}
 
 {% stepper %}
@@ -188,7 +188,7 @@ Poll state until `COMPLETED` or `FAILED`. Prefer ~5 s intervals.
 ## Safety and redaction
 
 * `recipientDetails` (bank account / mobile number) and `bankAccountName` are **redacted from logs**.
-* The backend `/v1` always requires a valid tenant API key — there is no anonymous MCP path.
+* The backend `/v1` always requires a valid tenant API key. There is no anonymous MCP path.
 * Remote MCP connections (Claude web / mobile) originate from the provider's cloud. Your MCP server must be **reachable on the public internet and behind a strong bearer token**.
 
 ## Troubleshooting
@@ -197,7 +197,7 @@ Poll state until `COMPLETED` or `FAILED`. Prefer ~5 s intervals.
 
 <summary>Client can't see any tools</summary>
 
-* Confirm the server process started — check the client's MCP logs for stdout (stdio) or `GET /healthz` (HTTP).
+* Confirm the server process started. Check the client's MCP logs for stdout (stdio) or `GET /healthz` (HTTP).
 * For stdio, remember: **stdout is the JSON-RPC channel**. Anything your wrapper prints to stdout will corrupt the protocol. Only stderr is safe.
 * For HTTP, make sure `Authorization: Bearer` matches `PAYSATS_MCP_HTTP_TOKEN` exactly (base64url, no whitespace).
 
