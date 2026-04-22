@@ -8,6 +8,14 @@
     },
     "lifi": {
       "url": "https://mcp.li.quest/mcp"
+    },
+    "paysats": {
+      "command": "node",
+      "args": ["${workspaceFolder}/mcp/dist/index.js"],
+      "env": {
+        "PAYSATS_API_KEY": "pk_live_your_key_here",
+        "PAYSATS_BASE_URL": "https://api.paysats.io"
+      }
     }
   }
 }

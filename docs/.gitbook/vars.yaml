@@ -1,0 +1,8 @@
+api_base_url: https://api.paysats.io
+sdk_package: "@paysats/sdk"
+mcp_package: "@paysats/mcp"
+mcp_hosted_url: https://mcp.paysats.io/mcp
+arbiscan_base: https://arbiscan.io/tx
+basescan_base: https://basescan.org/tx
+repo_url: https://github.com/Glittrfi/paysats
+support_email: hi@paysats.io

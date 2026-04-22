@@ -1,0 +1,43 @@
+{
+  "name": "@paysats/mcp",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Model Context Protocol (MCP) server for PaySats — Bitcoin/Lightning to IDR (BCA + e-wallets) via @paysats/sdk.",
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "paysats-mcp": "./dist/index.js"
+  },
+  "main": "./dist/index.js",
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=18.17"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/index.js",
+    "start:stdio": "PAYSATS_MCP_TRANSPORT=stdio node dist/index.js",
+    "start:http": "PAYSATS_MCP_TRANSPORT=http node dist/index.js",
+    "dev": "tsx src/index.ts",
+    "dev:http": "PAYSATS_MCP_TRANSPORT=http tsx src/index.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "@paysats/sdk": "file:../sdk",
+    "cors": "^2.8.5",
+    "express": "^4.21.2",
+    "express-rate-limit": "^7.4.1",
+    "zod": "^3.25.0"
+  },
+  "devDependencies": {
+    "@types/cors": "^2.8.17",
+    "@types/express": "^4.17.21",
+    "@types/node": "^20.17.30",
+    "tsx": "^4.19.3",
+    "typescript": "^5.8.3"
+  }
+}
